@@ -55,6 +55,9 @@ struct GeneralConfig {
     std::string desktopResolution = "1920x1080";
 
     std::string launchWrapper = "";
+    std::string selectedGpu = "";
+    bool hideLauncher = false;
+    bool autoApplyFixes = true;
     bool enableMangoHud = false;
     bool enableFsync = true;
     bool enableEsync = true;
@@ -69,6 +72,9 @@ public:
 
     void load(const std::filesystem::path& path);
     void save();
+    
+    nlohmann::json serialize() const;
+    void deserialize(const nlohmann::json& j);
 
     GeneralConfig& getGeneral() { return general_; }
     std::map<std::string, nlohmann::json>& getFFlags() { return fflags_; }

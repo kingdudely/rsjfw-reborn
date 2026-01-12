@@ -94,7 +94,7 @@ bool WineRunner::configure(ProgressCb cb) {
         if (cb)
           HTTP::download(fonts[i].first, fdest.string(),
                          makeSubProgress(start, start + (slice * 0.5f),
-                                         "DL " + fonts[i].second, cb));
+                                          "DL " + fonts[i].second, cb));
         else
           HTTP::download(fonts[i].first, fdest.string());
       }
@@ -113,7 +113,7 @@ bool WineRunner::configure(ProgressCb cb) {
             if (cb)
               cb(start + (slice * 0.9f), "Font: " + fname);
             fs::copy_file(entry.path(), fontsDir / fname,
-                          fs::copy_options::overwrite_existing);
+                           fs::copy_options::overwrite_existing);
           }
         }
       }
@@ -212,7 +212,7 @@ cmd::CmdResult WineRunner::runStudio(const std::string &versionGuid,
         "--disable-features=RendererCodeIntegrity";
   }
 
-  std::string ovr = "winebrowser.exe=b;d3dcompiler_47=n,b";
+  std::string ovr = "winebrowser.exe=b;d3dcompiler_47=n,b;atmlib=b";
   if (cfg.dxvk)
     ovr += ";d3d11,dxgi,d3d9,d3d10core=n,b";
 
@@ -249,4 +249,4 @@ cmd::CmdResult WineRunner::runStudio(const std::string &versionGuid,
   return ok ? cmd::CmdResult{0, 0} : cmd::CmdResult{-1, 1};
 }
 
-} // namespace rsjfw
+}

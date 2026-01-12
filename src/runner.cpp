@@ -22,6 +22,18 @@ void Runner::addBaseEnv() {
     env_ = cfg.customEnv;
     
     if (cfg.enableMangoHud) env_["MANGOHUD"] = "1";
+    
+    if (!cfg.selectedGpu.empty()) {
+        env_["MESA_VK_DEVICE_SELECT"] = cfg.selectedGpu;
+        
+        if (cfg.selectedGpu.find("0x10de") != std::string::npos) {
+            env_["__NV_PRIME_RENDER_OFFLOAD"] = "1";
+            env_["__GLX_VENDOR_LIBRARY_NAME"] = "nvidia";
+            env_["__VK_LAYER_NV_optimus"] = "NVIDIA_only";
+        } else {
+            env_["DRI_PRIME"] = "1";
+        }
+    }
 }
 
 }

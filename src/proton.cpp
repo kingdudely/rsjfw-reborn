@@ -173,7 +173,7 @@ bool ProtonRunner::configure(ProgressCb cb) {
     prefix_->registryAdd("HKLM\\Software\\Microsoft\\EdgeUpdate\\Clients\\{"
                          "F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
                          "pv", "130.0.2849.46", "REG_SZ");
-    prefix_->registryAdd("HKLM\\Software\\WOW6432Node\\Microsoft\\EdgeUpdate\\C"
+    prefix_->registryAdd("HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\C"
                          "lients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
                          "pv", "130.0.2849.46", "REG_SZ");
     prefix_->registryAdd("HKLM\\Software\\Khronos\\OpenXR\\1", "ActiveRuntime",
@@ -232,7 +232,7 @@ cmd::CmdResult ProtonRunner::runStudio(const std::string &versionGuid,
         "--disable-features=RendererCodeIntegrity";
   }
 
-  std::string ovr = "winebrowser.exe=b;d3dcompiler_47=n,b";
+  std::string ovr = "winebrowser.exe=b;d3dcompiler_47=n,b;atmlib=b";
   if (cfg.dxvk)
     ovr += ";d3d11,dxgi,d3d9,d3d10core=n,b";
 
@@ -268,4 +268,4 @@ cmd::CmdResult ProtonRunner::runStudio(const std::string &versionGuid,
   return ok ? cmd::CmdResult{0, 0} : cmd::CmdResult{-1, 1};
 }
 
-} // namespace rsjfw
+}

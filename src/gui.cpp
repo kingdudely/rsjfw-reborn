@@ -1,17 +1,27 @@
 #include "gui.h"
 #include "config.h"
 #include "logo_data.h"
-#include "downloader/wine_manager.h"
-#include "downloader/dxvk_manager.h"
-#include "downloader/roblox_manager.h"
-#include "downloader/github_client.h"
+#include "logo_wide_data.h"
+#include "font_roboto.h"
+#include "font_icons.h"
 #include "orchestrator.h"
 #include "path_manager.h"
+#include "diagnostics.h"
+#include "gui/icons.h"
+
+#include "gui/views/home_view.h"
+#include "gui/views/general_view.h"
+#include "gui/views/runner_view.h"
+#include "gui/views/dxvk_view.h"
+#include "gui/views/fflags_view.h"
+#include "gui/views/env_view.h"
+#include "gui/views/diagnostics_view.h"
+#include "gui/views/troubleshoot_view.h"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
-#include <ImGuiFileDialog.h>
+#include <imgui_internal.h>
 #include <GLFW/glfw3.h>
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -21,32 +31,31 @@
 #include <thread>
 #include <vector>
 #include <algorithm>
-#include <future>
 #include <filesystem>
+#include <map>
 
 namespace rsjfw {
 
-namespace fs = std::filesystem;
-using json = nlohmann::json;
+static std::map<int, float> tabHoverStates;
 
 static void glfw_error_callback(int error, const char* description) {
     std::cerr << "GLFW Error " << error << ": " << description << std::endl;
 }
 
-static bool InputTextString(const char* label, std::string& str) {
-    char buf[256];
-    strncpy(buf, str.c_str(), 255);
-    buf[255] = '\0';
-    if (ImGui::InputText(label, buf, 256)) {
-        str = std::string(buf);
-        return true;
-    }
-    return false;
-}
-
 GUI& GUI::instance() {
     static GUI inst;
     return inst;
+}
+
+GUI::GUI() {
+    views_.push_back(std::make_unique<HomeView>());
+    views_.push_back(std::make_unique<GeneralView>());
+    views_.push_back(std::make_unique<RunnerView>());
+    views_.push_back(std::make_unique<DxvkView>());
+    views_.push_back(std::make_unique<FFlagsView>());
+    views_.push_back(std::make_unique<EnvView>());
+    views_.push_back(std::make_unique<DiagnosticsView>());
+    views_.push_back(std::make_unique<TroubleshootView>());
 }
 
 bool GUI::init() {
@@ -58,7 +67,7 @@ bool GUI::init() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
     glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
-    window_ = glfwCreateWindow(800, 600, "RSJFW", NULL, NULL);
+    window_ = glfwCreateWindow(1200, 750, "RSJFW", NULL, NULL);
     if (!window_) return false;
 
     glfwMakeContextCurrent(window_);
@@ -66,28 +75,40 @@ bool GUI::init() {
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    ImGuiIO& io = ImGui::GetIO();
     
-    ImGui::StyleColorsDark();
+    ImFontConfig font_cfg;
+    font_cfg.FontDataOwnedByAtlas = false;
+    io.Fonts->AddFontFromMemoryTTF(_tmp_Roboto_Medium_ttf, _tmp_Roboto_Medium_ttf_len, 18.0f, &font_cfg);
+    
+    ImFontConfig icons_config; 
+    icons_config.MergeMode = true; 
+    icons_config.PixelSnapH = true;
+    icons_config.FontDataOwnedByAtlas = false;
+    static const ImWchar icons_ranges[] = { 0xf000, 0xf8ff, 0 };
+    io.Fonts->AddFontFromMemoryTTF(_tmp_fa_solid_900_ttf, _tmp_fa_solid_900_ttf_len, 16.0f, &icons_config, icons_ranges);
+
     ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 10.0f;
-    style.FrameRounding = 6.0f;
-    style.PopupRounding = 6.0f;
-    style.ScrollbarRounding = 6.0f;
-    style.GrabRounding = 4.0f;
-    style.TabRounding = 6.0f;
+    style.WindowRounding = 0.0f;
+    style.ChildRounding = 0.0f;
+    style.FrameRounding = 0.0f;
+    style.GrabRounding = 0.0f;
+    style.PopupRounding = 0.0f;
+    style.TabRounding = 0.0f;
+    style.ScrollbarRounding = 0.0f;
+    
+    style.ItemSpacing = ImVec2(0, 0); 
+    style.WindowPadding = ImVec2(0, 0);
     
     ImVec4* colors = style.Colors;
-    colors[ImGuiCol_WindowBg] = ImVec4(0.02f, 0.02f, 0.02f, 1.00f);
-    colors[ImGuiCol_Button] = ImVec4(0.86f, 0.08f, 0.24f, 1.00f);
-    colors[ImGuiCol_ButtonHovered] = ImVec4(0.96f, 0.18f, 0.34f, 1.00f);
-    colors[ImGuiCol_ButtonActive] = ImVec4(0.76f, 0.02f, 0.18f, 1.00f);
-    colors[ImGuiCol_Header] = ImVec4(0.86f, 0.08f, 0.24f, 0.50f);
-    colors[ImGuiCol_FrameBg] = ImVec4(0.08f, 0.08f, 0.08f, 1.00f);
-    
-    colors[ImGuiCol_TitleBg] = ImVec4(0.02f, 0.02f, 0.02f, 1.00f);
-    colors[ImGuiCol_TitleBgActive] = ImVec4(0.86f, 0.08f, 0.24f, 1.00f);
-    colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.02f, 0.02f, 0.02f, 0.75f);
+    colors[ImGuiCol_WindowBg] = ImVec4(0.05f, 0.05f, 0.05f, 1.00f);
+    colors[ImGuiCol_ChildBg] = ImVec4(0.08f, 0.08f, 0.08f, 1.00f);
+    colors[ImGuiCol_Button] = ImVec4(0.70f, 0.05f, 0.15f, 1.00f);
+    colors[ImGuiCol_ButtonHovered] = ImVec4(0.90f, 0.10f, 0.25f, 1.00f);
+    colors[ImGuiCol_ButtonActive] = ImVec4(0.50f, 0.02f, 0.10f, 1.00f);
+    colors[ImGuiCol_FrameBg] = ImVec4(0.12f, 0.12f, 0.12f, 1.00f);
+    colors[ImGuiCol_Header] = ImVec4(0.70f, 0.05f, 0.15f, 0.50f);
+    colors[ImGuiCol_Border] = ImVec4(0.15f, 0.15f, 0.15f, 1.00f);
 
     ImGui_ImplGlfw_InitForOpenGL(window_, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
@@ -100,8 +121,18 @@ bool GUI::init() {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
-        logoWidth_ = w;
-        logoHeight_ = h;
+        stbi_image_free(data);
+    }
+
+    data = stbi_load_from_memory(assets_logo_wide_png, assets_logo_wide_png_len, &w, &h, &c, 4);
+    if (data) {
+        glGenTextures(1, &wideLogoTexture_);
+        glBindTexture(GL_TEXTURE_2D, wideLogoTexture_);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+        wideLogoWidth_ = w;
+        wideLogoHeight_ = h;
         stbi_image_free(data);
     }
 
@@ -110,12 +141,18 @@ bool GUI::init() {
 
 void GUI::setMode(Mode mode) {
     mode_ = mode;
+    auto& cfg = Config::instance().getGeneral();
+
     if (mode_ == MODE_LAUNCHER) {
-        glfwSetWindowSize(window_, 500, 300);
+        if (cfg.hideLauncher) {
+            glfwHideWindow(window_);
+            return;
+        }
+        glfwSetWindowSize(window_, 900, 450);
         glfwSetWindowTitle(window_, "RSJFW Launcher");
     } else {
-        glfwSetWindowSize(window_, 900, 600);
-        glfwSetWindowTitle(window_, "RSJFW Configuration");
+        glfwSetWindowSize(window_, 1200, 750);
+        glfwSetWindowTitle(window_, "RSJFW Dashboard");
     }
     
     const GLFWvidmode* modeVid = glfwGetVideoMode(glfwGetPrimaryMonitor());
@@ -157,10 +194,8 @@ void GUI::run() {
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBringToFrontOnFocus;
         
         ImGui::Begin("Main", nullptr, flags);
-
         if (mode_ == MODE_CONFIG) renderConfig();
         else renderLauncher();
-
         ImGui::End();
 
         ImGui::Render();
@@ -176,7 +211,6 @@ void GUI::run() {
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
-        
         glfwDestroyWindow(window_);
         window_ = nullptr;
         glfwTerminate();
@@ -185,535 +219,151 @@ void GUI::run() {
 
 void GUI::shutdown() {
     running_ = false;
-    if (window_) {
-        glfwSetWindowShouldClose(window_, 1);
-    }
+    if (window_) glfwSetWindowShouldClose(window_, 1);
 }
 
 void GUI::renderConfig() {
-    static int tab = 0;
+    float winHeight = ImGui::GetWindowHeight();
+    float dt = ImGui::GetIO().DeltaTime;
     
-    ImGui::BeginChild("Sidebar", ImVec2(150, 0), true);
-    if (ImGui::Button("General", ImVec2(130, 30))) tab = 0;
-    if (ImGui::Button("Runner", ImVec2(130, 30))) tab = 1;
-    if (ImGui::Button("DXVK", ImVec2(130, 30))) tab = 2;
-    if (ImGui::Button("FFlags", ImVec2(130, 30))) tab = 3;
-    if (ImGui::Button("Env Vars", ImVec2(130, 30))) tab = 4;
-    if (ImGui::Button("Troubleshooting", ImVec2(130, 30))) tab = 5;
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.08f, 0.08f, 0.08f, 1.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
     
-    ImGui::Dummy(ImVec2(0, 20));
-    if (ImGui::Button("Save & Exit", ImVec2(130, 30))) {
+    ImGui::BeginChild("Sidebar", ImVec2(240, 0), true, ImGuiWindowFlags_NoScrollbar);
+    
+    if (logoTexture_) {
+        float s = 60.0f;
+        ImGui::SetCursorPos(ImVec2(90, 30)); 
+        ImGui::Image((void*)(intptr_t)logoTexture_, ImVec2(s, s));
+    }
+    ImGui::SetCursorPosY(110);
+    
+    float itemHeight = 55.0f;
+    float startY = ImGui::GetCursorPosY();
+
+    targetIndicatorY_ = startY + (currentTab_ * itemHeight);
+    indicatorY_ += (targetIndicatorY_ - indicatorY_) * dt * 15.0f;
+    
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    
+    dl->AddRectFilled(ImVec2(p.x, p.y + (indicatorY_ - startY)), 
+                      ImVec2(p.x + 240, p.y + (indicatorY_ - startY) + itemHeight), 
+                      IM_COL32(180, 10, 40, 255));
+    
+    dl->AddRectFilled(ImVec2(p.x, p.y + (indicatorY_ - startY)), 
+                      ImVec2(p.x + 4, p.y + (indicatorY_ - startY) + itemHeight), 
+                      IM_COL32(255, 40, 70, 255));
+
+    const char* icons[] = { ICON_FA_HOUSE, ICON_FA_GEARS, ICON_FA_ROCKET, ICON_FA_DESKTOP, ICON_FA_FLAG, ICON_FA_SLIDERS, ICON_FA_SHIELD_HALVED, ICON_FA_WRENCH };
+
+    for (int i = 0; i < (int)views_.size(); ++i) {
+        ImGui::PushID(i);
+        
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0,0,0,0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0,0,0,0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0,0,0,0));
+        
+        if (ImGui::Button("##tab", ImVec2(240, itemHeight))) {
+            currentTab_ = i;
+        }
+        
+        bool hovered = ImGui::IsItemHovered();
+        if (tabHoverStates.find(i) == tabHoverStates.end()) tabHoverStates[i] = 0.0f;
+        
+        float targetHover = hovered ? 1.0f : 0.0f;
+        tabHoverStates[i] += (targetHover - tabHoverStates[i]) * dt * 10.0f;
+        
+        ImGui::PopStyleColor(3);
+        
+        ImVec2 rectMin = ImGui::GetItemRectMin();
+        
+        if (tabHoverStates[i] > 0.01f) {
+            float lineWidth = 120.0f * tabHoverStates[i];
+            dl->AddLine(ImVec2(rectMin.x + 65, rectMin.y + 40), ImVec2(rectMin.x + 65 + lineWidth, rectMin.y + 40), IM_COL32(255, 40, 70, 255 * tabHoverStates[i]), 2.0f);
+        }
+        
+        bool selected = (currentTab_ == i);
+        ImU32 textCol = selected ? IM_COL32(255, 255, 255, 255) : IM_COL32(180, 180, 180, 255);
+        if (hovered) textCol = IM_COL32(255, 255, 255, 255);
+        
+        const char* icon = (i < 8) ? icons[i] : "?";
+        
+        ImGui::PushFont(ImGui::GetIO().Fonts->Fonts[0]);
+        ImGui::GetWindowDrawList()->AddText(ImVec2(rectMin.x + 30, rectMin.y + 18), textCol, icon);
+        ImGui::GetWindowDrawList()->AddText(ImVec2(rectMin.x + 65, rectMin.y + 18), textCol, views_[i]->getName());
+        ImGui::PopFont();
+        
+        ImGui::PopID();
+    }
+
+    float bottomHeight = 60.0f;
+    ImGui::SetCursorPosY(winHeight - bottomHeight);
+    
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.05f, 0.15f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.80f, 0.10f, 0.20f, 1.0f));
+    if (ImGui::Button("save & exit", ImVec2(120, bottomHeight))) {
         Config::instance().save();
         shutdown();
     }
+    ImGui::PopStyleColor(2);
+    
+    ImGui::SameLine();
+    
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
+    if (ImGui::Button("discard", ImVec2(120, bottomHeight))) {
+        shutdown();
+    }
+    ImGui::PopStyleColor(2);
+
     ImGui::EndChild();
+    ImGui::PopStyleColor(); 
+    ImGui::PopStyleVar();   
 
     ImGui::SameLine();
 
-    ImGui::BeginChild("Content", ImVec2(0, 0), true);
-    switch (tab) {
-        case 0: renderGeneralTab(); break;
-        case 1: renderRunnerTab(); break;
-        case 2: renderDxvkTab(); break;
-        case 3: renderFFlagsTab(); break;
-        case 4: renderEnvTab(); break;
-        case 5: renderTroubleshootingTab(); break;
+    ImGui::BeginGroup();
+    renderTopbar();
+    
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.1f, 0.1f, 0.1f, 1.00f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(40, 40));
+    ImGui::BeginChild("Content", ImVec2(0, 0), false, ImGuiWindowFlags_NoScrollbar);
+    
+    ImGui::Dummy(ImVec2(0, 10));
+    
+    if (currentTab_ >= 0 && currentTab_ < (int)views_.size()) {
+        views_[currentTab_]->render();
     }
+    
     ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+    ImGui::EndGroup();
 }
 
-void GUI::renderGeneralTab() {
-    auto& gen = Config::instance().getGeneral();
+void GUI::renderTopbar() {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.14f, 0.14f, 0.14f, 1.0f));
     
-    ImGui::Text("General Settings");
-    ImGui::Separator();
+    ImGui::BeginChild("Topbar", ImVec2(0, 60), false);
+    ImGui::SetCursorPos(ImVec2(30, (60 - ImGui::GetTextLineHeight()) * 0.5f));
     
-    const char* renderers[] = { "Automatic", "D3D11", "Vulkan", "OpenGL" };
-    int currentRenderer = 0;
-    for (int i = 0; i < 4; i++) {
-        if (gen.renderer == renderers[i]) {
-            currentRenderer = i;
-            break;
-        }
-    }
-    if (ImGui::Combo("Renderer", &currentRenderer, renderers, 4)) {
-        gen.renderer = renderers[currentRenderer];
-    }
+    ImGui::Text("%s", views_[currentTab_]->getName());
     
-    ImGui::InputInt("Target FPS", &gen.targetFps);
-    
-    if (ImGui::BeginCombo("Lighting", gen.lightingTechnology.c_str())) {
-        if (ImGui::Selectable("Default", gen.lightingTechnology == "Default")) gen.lightingTechnology = "Default";
-        if (ImGui::Selectable("Future", gen.lightingTechnology == "Future")) gen.lightingTechnology = "Future";
-        if (ImGui::Selectable("ShadowMap", gen.lightingTechnology == "ShadowMap")) gen.lightingTechnology = "ShadowMap";
-        ImGui::EndCombo();
-    }
+    ImGui::SameLine(ImGui::GetWindowWidth() - 250);
+    ImGui::TextDisabled("rsjfw-reborn v1.0.0");
 
-    ImGui::Checkbox("Use DXVK", &gen.dxvk);
-    ImGui::Checkbox("Dark Mode", &gen.darkMode);
-
-    ImGui::Dummy(ImVec2(0, 10));
-    ImGui::Text("Desktop Mode");
-    ImGui::Separator();
-    ImGui::Checkbox("Virtual Desktop Mode", &gen.desktopMode);
-    ImGui::Checkbox("Multi-Desktop (Unique Session)", &gen.multipleDesktops);
-    InputTextString("Resolution (WxH)", gen.desktopResolution);
+    ImGui::SameLine(ImGui::GetWindowWidth() - 100);
+    ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "%s online", ICON_FA_CIRCLE_CHECK);
+    
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
 }
 
-void GUI::renderRunnerTab() {
-    auto& gen = Config::instance().getGeneral();
-    
-    ImGui::Text("Runner Configuration");
-    ImGui::Separator();
-    
-    const char* runners[] = { "Wine", "Proton" };
-    int currentRunner = (gen.runnerType == "Proton") ? 1 : 0;
-    if (ImGui::Combo("Runner Type", &currentRunner, runners, 2)) {
-        gen.runnerType = runners[currentRunner];
-    }
-    
-    ImGui::Dummy(ImVec2(0, 10));
-    ImGui::Text("Launch Wrapper");
-    ImGui::SameLine();
-    ImGui::TextDisabled("(?)");
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Command to prepend (e.g. 'gamemoderun' or 'gamescope')");
-    
-    InputTextString("##Wrapper", gen.launchWrapper);
-    
-    ImGui::SameLine();
-    if (ImGui::Button("Gamemode")) gen.launchWrapper = "gamemoderun";
-    ImGui::SameLine();
-    if (ImGui::Button("Gamescope")) gen.launchWrapper = "gamescope -W 1920 -H 1080 -r 144 --";
-    
-    ImGui::Checkbox("Enable MangoHud", &gen.enableMangoHud);
-    ImGui::SameLine();
-    ImGui::Checkbox("Enable WebView2", &gen.enableWebView2);
-    
-    ImGui::Dummy(ImVec2(0, 20));
-    
-    if (gen.runnerType == "Proton") renderProtonConfig();
-    else renderWineConfig();
-}
-
-void GUI::renderWineConfig() {
-    auto& src = Config::instance().getGeneral().wineSource;
-    ImGui::Text("Wine Settings");
-    ImGui::Separator();
-
-    static bool mode = src.useCustomRoot;
-    if (ImGui::RadioButton("Use GitHub Repository", !mode)) { mode = false; src.useCustomRoot = false; }
-    ImGui::SameLine();
-    if (ImGui::RadioButton("Use Static Path", mode)) { mode = true; src.useCustomRoot = true; }
-
-    ImGui::Dummy(ImVec2(0, 10));
-
-    if (!mode) {
-        const char* presets[] = { "vinegarhq/wine-builds" };
-        static int currentPreset = -1;
-        
-        if (ImGui::Combo("Presets", &currentPreset, presets, 1)) {
-            src.repo = presets[currentPreset];
-        }
-
-        static std::string lastRepo = "";
-        static bool repoValid = false;
-        static std::vector<std::string> versions;
-        static std::future<void> fetchFuture;
-        static bool fetching = false;
-
-        InputTextString("GitHub Repo", src.repo);
-
-        if (src.repo != lastRepo && !fetching) {
-            lastRepo = src.repo;
-            fetching = true;
-            versions.clear();
-            fetchFuture = std::async(std::launch::async, [this, &src]() {
-                if (downloader::GithubClient::isValidRepo(src.repo)) {
-                    repoValid = true;
-                    auto rels = downloader::GithubClient::fetchReleases(src.repo);
-                    for (const auto& r : rels) versions.push_back(r.tag);
-                } else {
-                    repoValid = false;
-                }
-                fetching = false;
-            });
-        }
-
-        if (fetching) {
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1, 1, 0, 1), "Checking...");
-        } else if (!repoValid) {
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1, 0, 0, 1), "Invalid Repo!");
-        } else {
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0, 1, 0, 1), "Valid");
-        }
-
-        if (ImGui::BeginCombo("Version", src.version.c_str())) {
-            if (ImGui::Selectable("latest", src.version == "latest")) src.version = "latest";
-            for (const auto& v : versions) {
-                if (ImGui::Selectable(v.c_str(), src.version == v)) src.version = v;
-            }
-            ImGui::EndCombo();
-        }
-    } else {
-        InputTextString("Path", src.customRootPath);
-        ImGui::SameLine();
-        if (ImGui::Button("...")) {
-            ImGuiFileDialog::Instance()->OpenDialog("ChooseDir", "Choose Directory", nullptr, ".", 1, nullptr, ImGuiFileDialogFlags_Modal);
-        }
-
-        if (ImGuiFileDialog::Instance()->Display("ChooseDir", ImGuiWindowFlags_NoCollapse, ImVec2(400, 600))) {
-            if (ImGuiFileDialog::Instance()->IsOk()) {
-                src.customRootPath = ImGuiFileDialog::Instance()->GetFilePathName();
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
-    }
-    
-    ImGui::Dummy(ImVec2(0, 10));
-    ImGui::Text("Current Active Root:");
-    ImGui::TextColored(ImVec4(0, 1, 0, 1), "%s", src.installedRoot.empty() ? "None" : src.installedRoot.c_str());
-    
-    if (ImGui::Button("Force Update / Reinstall")) {
-        src.installedRoot = "";
-        Config::instance().save();
-    }
-}
-
-void GUI::renderProtonConfig() {
-    auto& src = Config::instance().getGeneral().protonSource;
-    ImGui::Text("Proton Settings");
-    ImGui::Separator();
-
-    static bool mode = src.useCustomRoot;
-    if (ImGui::RadioButton("Use GitHub Repository", !mode)) { mode = false; src.useCustomRoot = false; }
-    ImGui::SameLine();
-    if (ImGui::RadioButton("Use Static Path", mode)) { mode = true; src.useCustomRoot = true; }
-
-    ImGui::Dummy(ImVec2(0, 10));
-
-    if (!mode) {
-        const char* presets[] = { "GloriousEggroll/proton-ge-custom" };
-        static int currentPreset = -1;
-        
-        if (ImGui::Combo("Presets", &currentPreset, presets, 1)) {
-            src.repo = presets[currentPreset];
-        }
-
-        static std::string lastRepo = "";
-        static bool repoValid = false;
-        static std::vector<std::string> versions;
-        static std::future<void> fetchFuture;
-        static bool fetching = false;
-
-        InputTextString("GitHub Repo", src.repo);
-
-        if (src.repo != lastRepo && !fetching) {
-            lastRepo = src.repo;
-            fetching = true;
-            versions.clear();
-            fetchFuture = std::async(std::launch::async, [this, &src]() {
-                if (downloader::GithubClient::isValidRepo(src.repo)) {
-                    repoValid = true;
-                    auto rels = downloader::GithubClient::fetchReleases(src.repo);
-                    for (const auto& r : rels) versions.push_back(r.tag);
-                } else {
-                    repoValid = false;
-                }
-                fetching = false;
-            });
-        }
-
-        if (fetching) {
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1, 1, 0, 1), "Checking...");
-        } else if (!repoValid) {
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1, 0, 0, 1), "Invalid Repo!");
-        } else {
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0, 1, 0, 1), "Valid");
-        }
-
-        if (ImGui::BeginCombo("Version", src.version.c_str())) {
-            if (ImGui::Selectable("latest", src.version == "latest")) src.version = "latest";
-            for (const auto& v : versions) {
-                if (ImGui::Selectable(v.c_str(), src.version == v)) src.version = v;
-            }
-            ImGui::EndCombo();
-        }
-    } else {
-        InputTextString("Path", src.customRootPath);
-        ImGui::SameLine();
-        if (ImGui::Button("...")) {
-            ImGuiFileDialog::Instance()->OpenDialog("ChooseDirProton", "Choose Directory", nullptr, ".", 1, nullptr, ImGuiFileDialogFlags_Modal);
-        }
-
-        if (ImGuiFileDialog::Instance()->Display("ChooseDirProton", ImGuiWindowFlags_NoCollapse, ImVec2(400, 600))) {
-            if (ImGuiFileDialog::Instance()->IsOk()) {
-                src.customRootPath = ImGuiFileDialog::Instance()->GetFilePathName();
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
-    }
-    
-    ImGui::Dummy(ImVec2(0, 10));
-    ImGui::Text("Current Active Root:");
-    ImGui::TextColored(ImVec4(0, 1, 0, 1), "%s", src.installedRoot.empty() ? "None" : src.installedRoot.c_str());
-    
-    if (ImGui::Button("Force Update / Reinstall")) {
-        src.installedRoot = "";
-        Config::instance().save();
-    }
-    
-    ImGui::Dummy(ImVec2(0, 10));
-    ImGui::Text("Environment Toggles");
-    ImGui::Separator();
-    auto& gen = Config::instance().getGeneral();
-    ImGui::Checkbox("Enable Fsync", &gen.enableFsync);
-    ImGui::SameLine();
-    ImGui::Checkbox("Enable Esync", &gen.enableEsync);
-}
-
-void GUI::renderDxvkTab() {
-    auto& src = Config::instance().getGeneral().dxvkSource;
-    ImGui::Text("DXVK Configuration");
-    ImGui::Separator();
-    
-    static std::string lastRepo = "";
-    static bool repoValid = false;
-    static std::vector<std::string> versions;
-    static std::future<void> fetchFuture;
-    static bool fetching = false;
-
-    InputTextString("GitHub Repo", src.repo);
-
-    if (src.repo != lastRepo && !fetching) {
-        lastRepo = src.repo;
-        fetching = true;
-        versions.clear();
-        fetchFuture = std::async(std::launch::async, [this, &src]() {
-            if (downloader::GithubClient::isValidRepo(src.repo)) {
-                repoValid = true;
-                auto rels = downloader::GithubClient::fetchReleases(src.repo);
-                for (const auto& r : rels) versions.push_back(r.tag);
-            } else {
-                repoValid = false;
-            }
-            fetching = false;
-        });
-    }
-
-    if (fetching) {
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(1, 1, 0, 1), "Checking...");
-    } else if (!repoValid) {
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(1, 0, 0, 1), "Invalid Repo!");
-    } else {
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0, 1, 0, 1), "Valid");
-    }
-
-    if (ImGui::BeginCombo("Version", src.version.c_str())) {
-        if (ImGui::Selectable("latest", src.version == "latest")) src.version = "latest";
-        for (const auto& v : versions) {
-            if (ImGui::Selectable(v.c_str(), src.version == v)) src.version = v;
-        }
-        ImGui::EndCombo();
-    }
-    
-    ImGui::Dummy(ImVec2(0, 10));
-    ImGui::Text("Current Local Root:");
-    ImGui::TextColored(ImVec4(0, 1, 0, 1), "%s", src.installedRoot.empty() ? "None" : src.installedRoot.c_str());
-    
-    if (ImGui::Button("Force Reinstall DXVK")) {
-        src.installedRoot = "";
-        Config::instance().save();
-    }
-}
-
-void GUI::renderFFlagsTab() {
-    ImGui::Text("Fast Flags Editor");
-    ImGui::Separator();
-
-    if (ImGui::Button("FPS Unlock (999)")) {
-        Config::instance().getFFlags()["DFIntTaskSchedulerTargetFps"] = 999;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Quality Preset")) {
-        Config::instance().getFFlags()["FFlagDebugForceFutureIsBrightPhase3"] = true;
-        Config::instance().getGeneral().renderer = "Vulkan";
-        Config::instance().getGeneral().lightingTechnology = "Future";
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Performance Preset")) {
-        Config::instance().getFFlags()["FFlagDebugForceFutureIsBrightPhase3"] = false;
-        Config::instance().getGeneral().renderer = "Vulkan";
-        Config::instance().getGeneral().lightingTechnology = "ShadowMap";
-    }
-
-    ImGui::Separator();
-    
-    auto& fflags = Config::instance().getFFlags();
-    
-    static char keyBuf[256] = "";
-    static char valBuf[256] = "";
-    
-    ImGui::InputText("Flag Name", keyBuf, 256);
-    ImGui::InputText("Value (JSON)", valBuf, 256);
-    if (ImGui::Button("Add/Update")) {
-        try {
-            std::string k(keyBuf);
-            if (!k.empty()) {
-                json v = json::parse(valBuf);
-                fflags[k] = v;
-                memset(keyBuf, 0, 256);
-                memset(valBuf, 0, 256);
-            }
-        } catch(...) {}
-    }
-    
-    ImGui::Separator();
-    
-    if (ImGui::BeginTable("FFlags", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-        ImGui::TableSetupColumn("Name");
-        ImGui::TableSetupColumn("Value");
-        ImGui::TableHeadersRow();
-        
-        auto it = fflags.begin();
-        while (it != fflags.end()) {
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::Text("%s", it->first.c_str());
-            ImGui::TableSetColumnIndex(1);
-            ImGui::Text("%s", it->second.dump().c_str());
-            it++;
-        }
-        ImGui::EndTable();
-    }
-}
-
-void GUI::renderEnvTab() {
-    auto& env = Config::instance().getGeneral().customEnv;
-    ImGui::Text("Environment Variables");
-    ImGui::Separator();
-    
-    static char keyBuf[256] = "";
-    static char valBuf[256] = "";
-    
-    ImGui::InputText("Variable", keyBuf, 256);
-    ImGui::InputText("Value", valBuf, 256);
-    if (ImGui::Button("Set")) {
-        std::string k(keyBuf);
-        if (!k.empty()) {
-            env[k] = std::string(valBuf);
-            memset(keyBuf, 0, 256);
-            memset(valBuf, 0, 256);
-        }
-    }
-    
-    ImGui::Separator();
-    for (const auto& [k, v] : env) {
-        ImGui::Text("%s = %s", k.c_str(), v.c_str());
-    }
-}
-
-void GUI::renderTroubleshootingTab() {
-    auto& gen = Config::instance().getGeneral();
-    ImGui::Text("Maintenance Actions");
-    ImGui::TextColored(ImVec4(1, 0, 0, 1), "Warning: Some actions are destructive!");
-    ImGui::Separator();
-    
-    if (ImGui::Button("Wipe Prefix", ImVec2(200, 30))) {
-        ImGui::OpenPopup("Confirm Wipe");
-    }
-    
-    if (ImGui::BeginPopupModal("Confirm Wipe", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Are you sure you want to delete the entire prefix?");
-        ImGui::Text("All installed components will be removed.");
-        
-        if (ImGui::Button("Yes, Delete", ImVec2(120, 0))) {
-            try {
-                auto& pm = PathManager::instance();
-                if (gen.runnerType == "Proton") {
-                    fs::remove_all(pm.root() / "proton_data");
-                } else {
-                    fs::remove_all(pm.prefix());
-                }
-            } catch(...) {}
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
-    
-    ImGui::Dummy(ImVec2(0, 10));
-    
-    if (ImGui::Button("Force Reconfigure", ImVec2(200, 30))) {
-        try {
-            auto& pm = PathManager::instance();
-            if (gen.runnerType == "Proton") {
-                fs::remove(pm.root() / "proton_data" / ".rsjfw_proton_provisioned");
-            } else {
-                fs::remove(pm.prefix() / ".rsjfw_provisioned");
-            }
-        } catch(...) {}
-    }
-    ImGui::SameLine();
-    ImGui::TextDisabled("Triggers dependency install on next launch");
-    
-    ImGui::Dummy(ImVec2(0, 10));
-    
-    if (ImGui::Button("Clear Shader Cache", ImVec2(200, 30))) {
-        try {
-            auto& pm = PathManager::instance();
-            for (auto& entry : fs::recursive_directory_iterator(pm.root())) {
-                if (entry.path().extension() == ".dxvk-cache") {
-                    fs::remove(entry.path());
-                }
-            }
-        } catch(...) {}
-    }
-    
-    ImGui::Dummy(ImVec2(0, 10));
-    
-    if (ImGui::Button("Clear Downloads", ImVec2(200, 30))) {
-        try {
-            fs::remove_all(PathManager::instance().cache());
-            fs::create_directories(PathManager::instance().cache());
-        } catch(...) {}
-    }
-    
-    ImGui::Dummy(ImVec2(0, 10));
-    
-    if (ImGui::Button("Reset FFlags", ImVec2(200, 30))) {
-        try {
-            auto& rbx = downloader::RobloxManager::instance();
-            std::string guid = rbx.getLatestVersionGUID();
-            if (!guid.empty()) {
-                fs::path settings = PathManager::instance().versions() / guid / "ClientSettings" / "ClientAppSettings.json";
-                if (fs::exists(settings)) fs::remove(settings);
-            }
-        } catch(...) {}
-    }
-}
 
 void GUI::renderLauncher() {
     float w = ImGui::GetWindowWidth();
     float h = ImGui::GetWindowHeight();
-    
-    ImDrawList* draw = ImGui::GetWindowDrawList();
-    float barH = 30.0f;
-    ImVec2 winPos = ImGui::GetWindowPos();
-    ImVec2 barPos = ImVec2(winPos.x, winPos.y + h - barH);
-    
-    draw->AddRectFilled(barPos, ImVec2(barPos.x + w, barPos.y + barH), IM_COL32(30, 30, 30, 255));
     
     std::string s;
     float p;
@@ -724,32 +374,42 @@ void GUI::renderLauncher() {
     }
     
     static float smoothP = 0.0f;
-    smoothP += (p - smoothP) * ImGui::GetIO().DeltaTime * 5.0f;
-    
-    if (smoothP > 0.0f) {
-        float fillW = w * smoothP;
-        draw->AddRectFilled(barPos, ImVec2(barPos.x + fillW, barPos.y + barH), IM_COL32(220, 20, 60, 255));
+    smoothP += (p - smoothP) * ImGui::GetIO().DeltaTime * 4.0f;
+
+    if (wideLogoTexture_) {
+        float winAspect = w / h;
+        float imgAspect = (float)wideLogoWidth_ / (float)wideLogoHeight_;
+        float lw, lh;
+        
+        if (winAspect > imgAspect) {
+            lw = w;
+            lh = w / imgAspect;
+        } else {
+            lh = h;
+            lw = h * imgAspect;
+        }
+        
+        ImGui::SetCursorPos(ImVec2((w - lw) * 0.5f, (h - lh) * 0.5f));
+        ImGui::Image((void*)(intptr_t)wideLogoTexture_, ImVec2(lw, lh));
     }
     
-    if (logoTexture_) {
-        float size = 150.0f;
-        float aspect = (float)logoWidth_ / (float)logoHeight_;
-        float lw = size * aspect;
-        
-        float availableH = h - barH;
-        float yPos = (availableH - size) * 0.5f; 
-        
-        ImGui::SetCursorPos(ImVec2((w - lw) * 0.5f, yPos));
-        ImGui::Image((void*)(intptr_t)logoTexture_, ImVec2(lw, size));
+    float barH = 12.0f;
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(ImVec2(0, h - barH), ImVec2(w, h), IM_COL32(20, 20, 20, 255));
+    if (smoothP > 0.01f) {
+        draw->AddRectFilled(ImVec2(0, h - barH), ImVec2(w * smoothP, h), IM_COL32(220, 20, 60, 255));
+        draw->AddRectFilled(ImVec2(0, h - barH - 4), ImVec2(w * smoothP, h), IM_COL32(220, 20, 60, 100)); 
     }
     
-    ImGui::SetCursorPos(ImVec2(10, h - barH + (barH - ImGui::GetTextLineHeight()) * 0.5f));
+    ImGui::SetCursorPos(ImVec2(20, h - 40));
+    ImGui::PushFont(ImGui::GetIO().Fonts->Fonts[0]);
     ImGui::Text("%s", s.c_str());
     
     std::string pct = std::to_string((int)(smoothP * 100)) + "%";
     ImVec2 pctSize = ImGui::CalcTextSize(pct.c_str());
-    ImGui::SetCursorPos(ImVec2(w - pctSize.x - 10, h - barH + (barH - pctSize.y) * 0.5f));
+    ImGui::SetCursorPos(ImVec2(w - pctSize.x - 20, h - 40));
     ImGui::Text("%s", pct.c_str());
+    ImGui::PopFont();
 }
 
 }

@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <unistd.h>
 
 namespace rsjfw {
 
@@ -29,6 +30,16 @@ public:
   std::filesystem::path prefix() const { return root_ / "prefix"; }
   std::filesystem::path wine() const { return root_ / "wine"; }
 
+  std::filesystem::path executablePath() const {
+    char buf[1024];
+    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (len != -1) {
+      buf[len] = '\0';
+      return std::filesystem::path(buf);
+    }
+    return "";
+  }
+
   std::vector<std::filesystem::path> all_versions() const {
     std::vector<std::filesystem::path> allVers{};
     for (const auto &e : std::filesystem::directory_iterator(versions()))
@@ -44,6 +55,6 @@ private:
   std::filesystem::path root_;
 };
 
-} // namespace rsjfw
+}
 
 #endif

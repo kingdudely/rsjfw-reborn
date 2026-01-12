@@ -1,12 +1,12 @@
 #ifndef GUI_H
 #define GUI_H
 
+#include <atomic>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
-#include <functional>
-#include <mutex>
-#include <map>
-#include <atomic>
+#include "gui/view.h"
 
 struct GLFWwindow;
 
@@ -30,33 +30,37 @@ public:
     
     bool isRunning() const { return running_; }
 
+    void renderTopbar();
+    
+    unsigned int getLogoTexture() const { return logoTexture_; }
+    unsigned int getWideLogoTexture() const { return wideLogoTexture_; }
+    int getWideLogoWidth() const { return wideLogoWidth_; }
+    int getWideLogoHeight() const { return wideLogoHeight_; }
+
 private:
-    GUI() = default;
+    GUI();
     ~GUI() = default;
 
     void renderConfig();
     void renderLauncher();
     
-    void renderGeneralTab();
-    void renderRunnerTab();
-    void renderWineConfig();
-    void renderProtonConfig();
-    void renderDxvkTab();
-    void renderFFlagsTab();
-    void renderEnvTab();
-    void renderTroubleshootingTab();
+    std::vector<std::unique_ptr<View>> views_;
+    int currentTab_ = 0;
+    
+    float indicatorY_ = 0.0f;
+    float targetIndicatorY_ = 0.0f;
 
     GLFWwindow* window_ = nullptr;
+    unsigned int logoTexture_ = 0;
+    unsigned int wideLogoTexture_ = 0;
+    int wideLogoWidth_ = 0, wideLogoHeight_ = 0;
+
+    std::atomic<bool> running_{false};
     Mode mode_ = MODE_CONFIG;
-    bool running_ = false;
     
     float progress_ = 0.0f;
-    std::string status_ = "Initializing...";
+    std::string status_;
     std::mutex mutex_;
-
-    unsigned int logoTexture_ = 0;
-    int logoWidth_ = 0;
-    int logoHeight_ = 0;
 };
 
 }
