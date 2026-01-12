@@ -12,6 +12,7 @@
 #include "logger.h"
 #include "orchestrator.h"
 #include "path_manager.h"
+#include "diagnostics.h"
 
 namespace fs = std::filesystem;
 
@@ -20,6 +21,7 @@ void showHelp() {
             << "Usage:\n"
             << "  rsjfw launch [protocol]   Launch Roblox Studio\n"
             << "  rsjfw config              Open configuration UI\n"
+            << "  rsjfw register            Register desktop entry and protocol handlers\n"
             << "  rsjfw install             Install latest version without "
                "launching\n"
             << "  rsjfw kill                Kill all running Studio instances\n"
@@ -58,6 +60,19 @@ int main(int argc, char *argv[]) {
       launcherMode = true;
     } else if (cmd == "kill") {
       killStudio();
+      return 0;
+    } else if (cmd == "register") {
+      std::cout << "Registering RSJFW desktop integration...\n";
+      auto& diag = rsjfw::Diagnostics::instance();
+      diag.runChecks();
+      for (const auto& r : diag.getResults()) {
+          // Force apply Integration fixes
+          if (r.second.category == "Integration" && !r.second.ok && r.second.fixable) {
+              std::cout << "Applying fix for: " << r.first << "...\n";
+              diag.fixIssue(r.first, [](float, std::string){});
+          }
+      }
+      std::cout << "Registration complete.\n";
       return 0;
     } else if (cmd == "help" || cmd == "--help" || cmd == "-h") {
       showHelp();

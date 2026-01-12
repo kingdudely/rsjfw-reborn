@@ -79,3 +79,7 @@ target_link_libraries(rsjfw
     pthread
     dl
 )
+
+install(TARGETS rsjfw DESTINATION bin)
+
+install(TARGETS rsjfw DESTINATION bin)
