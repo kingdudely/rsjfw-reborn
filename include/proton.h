@@ -17,6 +17,8 @@ public:
                              stream_buffer_t& outBuffer) override;
 
     bool runWine(const std::string& exe, const std::vector<std::string>& args, const std::string& taskName) override;
+    std::string resolveWindowsPath(const std::string& unixPath) override;
+    std::map<std::string, std::string> getBaseEnv() override;
 
 private:
     std::string protonRoot_;

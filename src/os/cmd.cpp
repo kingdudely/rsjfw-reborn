@@ -1,4 +1,5 @@
 #include "os/cmd.h"
+#include "logger.h"
 #include <cstring>
 #include <signal.h>
 #include <sys/wait.h>
@@ -10,6 +11,20 @@
 #include <poll.h>
 
 namespace rsjfw::cmd {
+
+std::set<pid_t> Command::activePids_;
+std::mutex Command::pidsMtx_;
+
+void Command::registerPid(pid_t pid) {
+    if (pid <= 0) return;
+    std::lock_guard lock(pidsMtx_);
+    activePids_.insert(pid);
+}
+
+void Command::unregisterPid(pid_t pid) {
+    std::lock_guard lock(pidsMtx_);
+    activePids_.erase(pid);
+}
 
 static void readLoop(int fd, stream_buffer_t &buffer) {
     char buf[4096];
@@ -24,6 +39,12 @@ static void readLoop(int fd, stream_buffer_t &buffer) {
 CmdResult Command::runAsync(const std::string &exe,
                             const std::vector<std::string> &args,
                             const Options &opts, stream_buffer_t *buffer) {
+    std::string fullCmd = "";
+    for (const auto &[k, v] : opts.env) fullCmd += k + "=" + v + " ";
+    fullCmd += exe;
+    for (const auto &a : args) fullCmd += " " + a;
+    LOG_DEBUG("[cmd] %s", fullCmd.c_str());
+
     int outPipe[2], errPipe[2];
     if (buffer) {
         if (pipe(outPipe) != 0 || pipe(errPipe) != 0) return {-1, -1};
@@ -60,12 +81,29 @@ CmdResult Command::runAsync(const std::string &exe,
         _exit(127);
     }
 
+    registerPid(pid);
+
     if (buffer) {
         close(outPipe[1]);
         close(errPipe[1]);
-        std::thread(readLoop, outPipe[0], std::ref(*buffer)).detach();
-        if (!opts.mergeStdoutStderr)
-            std::thread(readLoop, errPipe[0], std::ref(*buffer)).detach();
+        std::thread([pid, fd = outPipe[0], buffer]() {
+            readLoop(fd, *buffer);
+            int status;
+            waitpid(pid, &status, 0);
+            Command::unregisterPid(pid);
+        }).detach();
+        
+        if (!opts.mergeStdoutStderr) {
+            std::thread([fd = errPipe[0], buffer]() {
+                readLoop(fd, *buffer);
+            }).detach();
+        }
+    } else {
+        std::thread([pid]() {
+            int status;
+            waitpid(pid, &status, 0);
+            Command::unregisterPid(pid);
+        }).detach();
     }
 
     return {pid, -1};
@@ -74,6 +112,12 @@ CmdResult Command::runAsync(const std::string &exe,
 CmdResult Command::runSync(const std::string &exe,
                            const std::vector<std::string> &args,
                            const Options &opts, stream_buffer_t *buffer) {
+    std::string fullCmd = "";
+    for (const auto &[k, v] : opts.env) fullCmd += k + "=" + v + " ";
+    fullCmd += exe;
+    for (const auto &a : args) fullCmd += " " + a;
+    LOG_DEBUG("[cmd] %s", fullCmd.c_str());
+
     int outPipe[2], errPipe[2];
     if (pipe(outPipe) != 0 || pipe(errPipe) != 0) return {-1, -1};
 
@@ -101,6 +145,8 @@ CmdResult Command::runSync(const std::string &exe,
         execvp(exe.c_str(), argv.data());
         _exit(127);
     }
+
+    registerPid(pid);
 
     close(outPipe[1]);
     close(errPipe[1]);
@@ -176,6 +222,7 @@ CmdResult Command::runSync(const std::string &exe,
         else if (WIFSIGNALED(status)) exitCode = 128 + WTERMSIG(status);
     }
 
+    unregisterPid(pid);
     return {pid, exitCode};
 }
 
@@ -186,6 +233,25 @@ void Command::kill(pid_t pid, bool force) {
         usleep(300000);
         ::kill(pid, SIGKILL);
     }
+}
+
+void Command::killAll() {
+    std::lock_guard lock(pidsMtx_);
+    LOG_INFO("Killing %zu active commands...", activePids_.size());
+    for (pid_t pid : activePids_) {
+        LOG_DEBUG("Killing process %d", pid);
+        ::kill(pid, SIGTERM);
+    }
+    
+    usleep(500000);
+    
+    for (pid_t pid : activePids_) {
+        if (::kill(pid, 0) == 0) {
+            LOG_DEBUG("Process %d still alive, using SIGKILL", pid);
+            ::kill(pid, SIGKILL);
+        }
+    }
+    activePids_.clear();
 }
 
 }

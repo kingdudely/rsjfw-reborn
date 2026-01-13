@@ -8,6 +8,7 @@
 #include "path_manager.h"
 #include "diagnostics.h"
 #include "gui/icons.h"
+#include "logger.h"
 
 #include "gui/views/home_view.h"
 #include "gui/views/general_view.h"
@@ -33,13 +34,14 @@
 #include <algorithm>
 #include <filesystem>
 #include <map>
+#include <cmath>
 
 namespace rsjfw {
 
 static std::map<int, float> tabHoverStates;
 
 static void glfw_error_callback(int error, const char* description) {
-    std::cerr << "GLFW Error " << error << ": " << description << std::endl;
+    LOG_ERROR("GLFW Error %d: %s", error, description);
 }
 
 GUI& GUI::instance() {
@@ -224,6 +226,7 @@ void GUI::shutdown() {
 
 void GUI::renderConfig() {
     float winHeight = ImGui::GetWindowHeight();
+    float winWidth = ImGui::GetWindowWidth();
     float dt = ImGui::GetIO().DeltaTime;
     
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.08f, 0.08f, 0.08f, 1.0f));
@@ -364,6 +367,7 @@ void GUI::renderTopbar() {
 void GUI::renderLauncher() {
     float w = ImGui::GetWindowWidth();
     float h = ImGui::GetWindowHeight();
+    float dt = ImGui::GetIO().DeltaTime;
     
     std::string s;
     float p;
@@ -372,9 +376,43 @@ void GUI::renderLauncher() {
         s = status_;
         p = progress_;
     }
-    
+
+    auto state = Orchestrator::instance().getState();
+    std::string stateStr = "";
+    switch (state) {
+        case LauncherState::BOOTSTRAPPING: stateStr = "bootstrapping environment"; break;
+        case LauncherState::DOWNLOADING_ROBLOX: stateStr = "fetching roblox studio"; break;
+        case LauncherState::PREPARING_WINE: stateStr = "preparing compatibility layer"; break;
+        case LauncherState::INSTALLING_DXVK: stateStr = "optimizing graphics"; break;
+        case LauncherState::APPLYING_CONFIG: stateStr = "applying settings"; break;
+        case LauncherState::LAUNCHING_STUDIO: stateStr = "launching studio"; break;
+        default: stateStr = "ready"; break;
+    }
+
     static float smoothP = 0.0f;
-    smoothP += (p - smoothP) * ImGui::GetIO().DeltaTime * 4.0f;
+    static LauncherState lastState = LauncherState::IDLE;
+    static std::string lastStateStr = "";
+    static float textAnim = 1.0f;
+
+    if (state != lastState) {
+        lastStateStr = (lastState == LauncherState::IDLE) ? "" : stateStr; 
+        // Need the literal previous string, not the new one
+        // Better:
+        if (lastState == LauncherState::BOOTSTRAPPING) lastStateStr = "bootstrapping environment";
+        else if (lastState == LauncherState::DOWNLOADING_ROBLOX) lastStateStr = "fetching roblox studio";
+        else if (lastState == LauncherState::PREPARING_WINE) lastStateStr = "preparing compatibility layer";
+        else if (lastState == LauncherState::INSTALLING_DXVK) lastStateStr = "optimizing graphics";
+        else if (lastState == LauncherState::APPLYING_CONFIG) lastStateStr = "applying settings";
+        else if (lastState == LauncherState::LAUNCHING_STUDIO) lastStateStr = "launching studio";
+        else lastStateStr = "ready";
+
+        lastState = state;
+        smoothP = 0.0f; 
+        textAnim = 0.0f;
+    }
+
+    textAnim = std::min(1.0f, textAnim + dt * 2.0f);
+    smoothP += (p - smoothP) * dt * 4.0f;
 
     if (wideLogoTexture_) {
         float winAspect = w / h;
@@ -393,22 +431,38 @@ void GUI::renderLauncher() {
         ImGui::Image((void*)(intptr_t)wideLogoTexture_, ImVec2(lw, lh));
     }
     
-    float barH = 12.0f;
+    float barH = 50.0f;
     ImDrawList* draw = ImGui::GetWindowDrawList();
-    draw->AddRectFilled(ImVec2(0, h - barH), ImVec2(w, h), IM_COL32(20, 20, 20, 255));
-    if (smoothP > 0.01f) {
-        draw->AddRectFilled(ImVec2(0, h - barH), ImVec2(w * smoothP, h), IM_COL32(220, 20, 60, 255));
-        draw->AddRectFilled(ImVec2(0, h - barH - 4), ImVec2(w * smoothP, h), IM_COL32(220, 20, 60, 100)); 
-    }
+    ImVec2 barPos = ImVec2(0, h - barH);
     
-    ImGui::SetCursorPos(ImVec2(20, h - 40));
+    draw->AddRectFilled(barPos, ImVec2(w, h), IM_COL32(25, 25, 25, 255));
+    
+    if (smoothP > 0.001f) {
+        draw->AddRectFilled(barPos, ImVec2(w * smoothP, h), IM_COL32(180, 10, 40, 255));
+    }
+
     ImGui::PushFont(ImGui::GetIO().Fonts->Fonts[0]);
-    ImGui::Text("%s", s.c_str());
+    
+    float ease = 1.0f - std::pow(1.0f - textAnim, 3.0f);
+    
+    if (textAnim < 1.0f && !lastStateStr.empty() && lastStateStr != stateStr) {
+        ImU32 prevColor = IM_COL32(200, 200, 200, (int)((1.0f - ease) * 255));
+        ImVec2 prevStatePos = ImVec2(20 + ease * 100.0f, h - barH + 5);
+        draw->AddText(prevStatePos, prevColor, lastStateStr.c_str());
+    }
+
+    ImU32 curColor = IM_COL32(255, 255, 255, (int)(ease * 255));
+    ImVec2 curStatePos = ImVec2(-50.0f + ease * 70.0f, h - barH + 5);
+    draw->AddText(curStatePos, curColor, stateStr.c_str());
+
+    ImVec2 textPos = ImVec2(20, h - 25);
+    draw->AddText(textPos, IM_COL32(255, 255, 255, 255), s.c_str());
     
     std::string pct = std::to_string((int)(smoothP * 100)) + "%";
     ImVec2 pctSize = ImGui::CalcTextSize(pct.c_str());
-    ImGui::SetCursorPos(ImVec2(w - pctSize.x - 20, h - 40));
-    ImGui::Text("%s", pct.c_str());
+    ImVec2 pctPos = ImVec2(w - pctSize.x - 20, h - barH + (barH - ImGui::GetTextLineHeight()) * 0.5f);
+    draw->AddText(pctPos, IM_COL32(255, 255, 255, 255), pct.c_str());
+    
     ImGui::PopFont();
 }
 

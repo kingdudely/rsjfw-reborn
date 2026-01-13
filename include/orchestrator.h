@@ -27,7 +27,7 @@ class Orchestrator {
 public:
     static Orchestrator& instance();
 
-    void startLaunch(const std::string& arg); // arg = guid or protocol
+    void startLaunch(const std::string& arg);
     void cancel();
 
     LauncherState getState() const { return state_; }

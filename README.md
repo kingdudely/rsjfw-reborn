@@ -14,10 +14,11 @@ Legacy wrappers are slow, bloated, and prone to breakage. RSJFW is an engine, no
 | Feature | Legacy Wrappers | RSJFW |
 |---------|-----------------|-------|
 | **Core Architecture** | Python / Bash Glue | **Native C++20 Engine** |
+| **WebView2** | Barely working | Works now YAY! (tested best with Proton)
 | **Startup Latency** | 2-5 Seconds | **< 200ms** |
 | **Protocol Handling** | Fragile, often breaks | **Native Socket/Pipe Interop** |
 | **Diagnostics** | "Check the logs" | **Self-Healing Orchestrator** |
-| **Asset Control** | Vague "latest" | **Precise Binary Selection** |
+| **Asset Control** | DOWNLOAD IT YOURSELF LOL! | **Precise Binary Selection** |
 | **GPU Management** | Manual env vars | **Auto-Discovery & Injection** |
 
 ## Features

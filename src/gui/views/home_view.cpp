@@ -72,7 +72,7 @@ void HomeView::render() {
             } else {
                 runnerVal = gen.wineSource.repo;
             }
-        } else {
+        } else if (gen.runnerType == "Proton") {
             runnerVer = gen.protonSource.version;
             if (gen.protonSource.useCustomRoot) {
                 std::string p = gen.protonSource.customRootPath;

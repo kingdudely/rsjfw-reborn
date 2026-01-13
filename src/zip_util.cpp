@@ -73,7 +73,9 @@ bool ZipUtil::extract(const std::string& archivePath,
 
         if (cb) {
             float progress = (float)archive_filter_bytes(a, -1) / totalBytes;
-            cb(progress, "Extracting " + safePath.string());
+            std::string name = safePath.string();
+            if (name.length() > 30) name = "..." + name.substr(name.length() - 27);
+            cb(progress, "extracting: " + name);
         }
 
         int r = archive_write_header(ext, entry);

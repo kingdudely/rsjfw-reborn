@@ -28,8 +28,10 @@ namespace rsjfw
                                          stream_buffer_t& outBuffer) = 0;
 
         virtual bool runWine(const std::string& exe, const std::vector<std::string>& args, const std::string& taskName) = 0;
+        virtual std::string resolveWindowsPath(const std::string& unixPath) = 0;
 
         std::shared_ptr<Prefix> getPrefix() const { return prefix_; }
+        virtual std::map<std::string, std::string> getBaseEnv();
 
     protected:
         std::shared_ptr<Prefix> prefix_;

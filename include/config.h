@@ -36,8 +36,8 @@ struct DxvkSourceConfig {
 };
 
 struct GeneralConfig {
-    std::string runnerType = "Wine";
-    std::string renderer = "D3D11";
+    std::string runnerType = "Proton";
+    std::string renderer = "Vulkan";
     bool dxvk = true;
     
     WineSourceConfig wineSource;

@@ -4,6 +4,8 @@
 #include <string>
 #include "common.h"
 
+#include <curl/curl.h>
+
 namespace rsjfw {
 
     class HTTP {
@@ -14,7 +16,7 @@ namespace rsjfw {
     private:
         static size_t writeCallback(void* contents, size_t size, size_t nmemb, std::string* userp);
         static size_t fileWriteCallback(void* contents, size_t size, size_t nmemb, void* userp);
-        static int progressCallback(void* clientp, double dltotal, double dlnow, double ultotal, double ulnow);
+        static int progressCallback(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow);
     };
 
 }

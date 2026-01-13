@@ -34,25 +34,42 @@ static std::vector<GpuInfo> discoverGpus() {
     std::vector<GpuInfo> gpus;
     gpus.push_back({"automatic / default", ""});
     try {
+        std::vector<std::string> cards;
         for (const auto& entry : fs::directory_iterator("/sys/class/drm")) {
             std::string name = entry.path().filename().string();
             if (name.find("card") == 0 && name.find("-") == std::string::npos) {
-                fs::path devicePath = entry.path() / "device";
-                if (fs::exists(devicePath / "vendor") && fs::exists(devicePath / "device")) {
-                    std::ifstream v(devicePath / "vendor");
-                    std::ifstream d(devicePath / "device");
-                    std::string vendor, device;
-                    v >> vendor;
-                    d >> device;
-                    std::string vendorName = vendor;
-                    if (vendor == "0x10de") vendorName = "nvidia";
-                    else if (vendor == "0x1002") vendorName = "amd";
-                    else if (vendor == "0x8086") vendorName = "intel";
-                    GpuInfo info;
-                    info.id = vendor + ":" + device;
-                    info.name = vendorName + " (" + name + ")";
-                    gpus.push_back(info);
+                cards.push_back(name);
+            }
+        }
+        // Sort cards (card0, card1...) to match DRI_PRIME index expectations
+        std::sort(cards.begin(), cards.end());
+
+        for (size_t i = 0; i < cards.size(); ++i) {
+            fs::path cardPath = fs::path("/sys/class/drm") / cards[i];
+            fs::path devicePath = cardPath / "device";
+            if (fs::exists(devicePath / "vendor") && fs::exists(devicePath / "device")) {
+                std::ifstream v(devicePath / "vendor");
+                std::ifstream d(devicePath / "device");
+                std::string vendor, device;
+                v >> vendor;
+                d >> device;
+                
+                std::string vendorName = vendor;
+                if (vendor == "0x10de") vendorName = "NVIDIA";
+                else if (vendor == "0x1002") vendorName = "AMD";
+                else if (vendor == "0x8086") vendorName = "Intel";
+                
+                GpuInfo info;
+                // Use the card index for DRI_PRIME
+                info.id = std::to_string(i);
+                
+                std::string pciAddr = "";
+                if (fs::is_symlink(devicePath)) {
+                    pciAddr = " [" + fs::read_symlink(devicePath).filename().string() + "]";
                 }
+
+                info.name = vendorName + " " + device + " (" + cards[i] + ")" + pciAddr;
+                gpus.push_back(info);
             }
         }
     } catch (...) {}
@@ -91,8 +108,8 @@ void GeneralView::render() {
     
     ImGui::Dummy(ImVec2(0, 5));
     
-    float w = ImGui::GetContentRegionAvail().x - 10;
-    float btnW = (w - 20) / 3; 
+    float availW = ImGui::GetContentRegionAvail().x - 180 - 10;
+    float btnW = (availW - 10) / 3.0f; 
     
     ImGui::SetCursorPosX(180);
     if (ImGui::Button("load", ImVec2(btnW, 0))) {
@@ -100,11 +117,11 @@ void GeneralView::render() {
             pm.loadPreset(presets[selectedPreset].name);
         }
     }
-    ImGui::SameLine();
+    ImGui::SameLine(0, 5);
     if (ImGui::Button("save as...", ImVec2(btnW, 0))) {
         ImGui::OpenPopup("SavePresetPopup");
     }
-    ImGui::SameLine();
+    ImGui::SameLine(0, 5);
     if (ImGui::Button("delete", ImVec2(btnW, 0))) {
         if (selectedPreset >= 0 && selectedPreset < (int)presets.size()) {
             pm.deletePreset(presets[selectedPreset].name);
@@ -117,7 +134,7 @@ void GeneralView::render() {
     if (ImGui::Button("import...", ImVec2(btnW, 0))) {
         ImGuiFileDialog::Instance()->OpenDialog("ImportPreset", "import .rsjfwpreset", ".rsjfwpreset", ".", 1, nullptr, ImGuiFileDialogFlags_Modal);
     }
-    ImGui::SameLine();
+    ImGui::SameLine(0, 5);
     if (ImGui::Button("export...", ImVec2(btnW, 0))) {
         if (selectedPreset >= 0 && selectedPreset < (int)presets.size()) {
             ImGuiFileDialog::Instance()->OpenDialog("ExportPreset", "export preset", ".rsjfwpreset", ".", 1, nullptr, ImGuiFileDialogFlags_Modal);
@@ -164,12 +181,10 @@ void GeneralView::render() {
     ImGui::SameLine(180);
     const char* renderers[] = { "automatic", "d3d11", "vulkan", "opengl" };
     int currentRenderer = 0;
-    for (int i = 0; i < 4; i++) {
-        if (gen.renderer == renderers[i]) {
-            currentRenderer = i;
-            break;
-        }
-    }
+    if (gen.renderer == "D3D11") currentRenderer = 1;
+    else if (gen.renderer == "Vulkan") currentRenderer = 2;
+    else if (gen.renderer == "OpenGL") currentRenderer = 3;
+
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 10);
     if (ImGui::Combo("##Renderer", &currentRenderer, renderers, 4)) {
         gen.renderer = (currentRenderer == 0) ? "Automatic" : (currentRenderer == 1) ? "D3D11" : (currentRenderer == 2) ? "Vulkan" : "OpenGL";

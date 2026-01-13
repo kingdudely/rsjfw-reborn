@@ -8,6 +8,7 @@
 #include "runner.h"
 #include "logger.h"
 #include "diagnostics.h"
+#include "credential_manager.h"
 #include <iostream>
 #include <chrono>
 #include <fstream>
@@ -16,8 +17,11 @@
 #include <filesystem>
 #include <unistd.h>
 #include <algorithm>
+#include <iomanip>
 
 namespace rsjfw {
+
+namespace fs = std::filesystem;
 
 Orchestrator& Orchestrator::instance() {
     static Orchestrator inst;
@@ -31,17 +35,17 @@ Orchestrator::~Orchestrator() {
 
 static std::string stateToString(LauncherState s) {
     switch (s) {
-        case LauncherState::IDLE: return "IDLE";
-        case LauncherState::BOOTSTRAPPING: return "BOOTSTRAPPING";
-        case LauncherState::DOWNLOADING_ROBLOX: return "DOWNLOADING_ROBLOX";
-        case LauncherState::PREPARING_WINE: return "PREPARING_WINE";
-        case LauncherState::INSTALLING_DXVK: return "INSTALLING_DXVK";
-        case LauncherState::APPLYING_CONFIG: return "APPLYING_CONFIG";
-        case LauncherState::LAUNCHING_STUDIO: return "LAUNCHING_STUDIO";
-        case LauncherState::RUNNING: return "RUNNING";
-        case LauncherState::FINISHED: return "FINISHED";
-        case LauncherState::ERROR: return "ERROR";
-        default: return "UNKNOWN";
+        case LauncherState::IDLE: return "idle";
+        case LauncherState::BOOTSTRAPPING: return "bootstrapping environment";
+        case LauncherState::DOWNLOADING_ROBLOX: return "fetching roblox studio";
+        case LauncherState::PREPARING_WINE: return "preparing compatibility layer";
+        case LauncherState::INSTALLING_DXVK: return "optimizing graphics";
+        case LauncherState::APPLYING_CONFIG: return "applying settings";
+        case LauncherState::LAUNCHING_STUDIO: return "launching studio";
+        case LauncherState::RUNNING: return "running";
+        case LauncherState::FINISHED: return "finished";
+        case LauncherState::ERROR: return "error";
+        default: return "unknown";
     }
 }
 
@@ -55,6 +59,7 @@ void Orchestrator::startLaunch(const std::string& arg) {
 
 void Orchestrator::cancel() {
     stop_ = true;
+    rsjfw::cmd::Command::killAll();
 }
 
 void Orchestrator::setStatus(float p, const std::string& s) {
@@ -65,7 +70,11 @@ void Orchestrator::setStatus(float p, const std::string& s) {
 }
 
 void Orchestrator::setState(LauncherState s) {
-    LOG_INFO("State Transition: %s", stateToString(s).c_str());
+    auto now = std::chrono::steady_clock::now();
+    static auto lastTransition = now;
+    auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastTransition).count();
+    LOG_INFO("State Transition: %s (%lld ms since last)", stateToString(s).c_str(), diff);
+    lastTransition = now;
     state_ = s;
 }
 
@@ -73,15 +82,19 @@ void Orchestrator::setError(const std::string& e) {
     std::lock_guard<std::mutex> l(mutex_);
     error_ = e;
     state_ = LauncherState::ERROR;
-    setStatus(1.0f, "Error: " + e);
+    setStatus(1.0f, "error: " + e);
 }
 
 void Orchestrator::worker(std::string arg) {
+    auto startTime = std::chrono::steady_clock::now();
     try {
         bool installOnly = (arg == "INSTALL_ONLY");
         std::vector<std::string> launchArgs;
         bool isProtocol = false;
-        if (!installOnly) {
+        bool isFile = false;
+        std::string targetPath = arg;
+
+        if (!installOnly && !arg.empty()) {
             if (arg.find("roblox-studio-auth:") == 0) {
                 launchArgs.push_back(arg);
                 isProtocol = true;
@@ -89,138 +102,114 @@ void Orchestrator::worker(std::string arg) {
                 launchArgs.push_back("-protocolString");
                 launchArgs.push_back(arg);
                 isProtocol = true;
+            } else {
+                if (targetPath.find("file://") == 0) {
+                    targetPath = targetPath.substr(7);
+                    size_t pos = 0;
+                    while ((pos = targetPath.find("%20", pos)) != std::string::npos) {
+                        targetPath.replace(pos, 3, " ");
+                        pos += 1;
+                    }
+                }
+                
+                if (fs::exists(targetPath)) {
+                    isFile = true;
+                    LOG_INFO("detected local file for launch: %s", targetPath.c_str());
+                }
             }
         }
+        
         auto& cfg = Config::instance().getGeneral();
+
         setState(LauncherState::BOOTSTRAPPING);
-        setStatus(0.1f, "running diagnostics...");
+        LOG_DEBUG("Orchestrator worker started with arg: %s", arg.c_str());
+
+        setStatus(0.05f, "running system audit...");
         auto& diag = Diagnostics::instance();
         diag.runChecks();
         if (cfg.autoApplyFixes) {
             for (const auto& r : diag.getResults()) {
                 if (!r.second.ok && r.second.fixable && !r.second.ignored) {
-                    diag.fixIssue(r.first, [](float, std::string){});
+                    LOG_INFO("resolving environment issue: %s", r.first.c_str());
+                    diag.fixIssue(r.first, [&](float p, std::string s){
+                        setStatus(0.05f + (p * 0.05f), "fixing " + r.first + ": " + s);
+                    });
                 }
             }
         }
-        setStatus(0.15f, "resolving roblox version...");
+
+        setStatus(0.1f, "resolving roblox version...");
         auto& rbx = downloader::RobloxManager::instance();
         std::string guid;
-        if (isProtocol) {
-            auto versions = rbx.getInstalledVersions();
-            if (!versions.empty()) {
-                std::sort(versions.begin(), versions.end(), [&](const std::string& a, const std::string& b) {
-                    auto pathA = PathManager::instance().versions() / a / "AppSettings.xml";
-                    auto pathB = PathManager::instance().versions() / b / "AppSettings.xml";
-                    try {
-                        return std::filesystem::last_write_time(pathA) > std::filesystem::last_write_time(pathB);
-                    } catch(...) { return a > b; }
-                });
-                guid = versions[0];
-            }
+
+        auto installed = rbx.getInstalledVersions();
+        if (!installed.empty()) {
+            std::sort(installed.begin(), installed.end(), [&](const std::string& a, const std::string& b) {
+                try {
+                    return fs::last_write_time(PathManager::instance().versions() / a / "AppSettings.xml") > 
+                           fs::last_write_time(PathManager::instance().versions() / b / "AppSettings.xml");
+                } catch(...) { return a > b; }
+            });
+            guid = installed[0];
+            LOG_DEBUG("using local version for speed: %s", guid.c_str());
+            
+            // Trigger background update check
+            std::thread([&rbx, &cfg](){
+                try {
+                    auto latest = rbx.getLatestVersionGUID(cfg.channel);
+                    LOG_DEBUG("background update check result: %s", latest.c_str());
+                } catch(...) {}
+            }).detach();
         }
+
         if (guid.empty() && !stop_) {
-            try {
-                guid = rbx.getLatestVersionGUID(cfg.channel);
-            } catch (...) {}
-            if (guid.empty()) {
-                auto versions = rbx.getInstalledVersions();
-                if (!versions.empty()) {
-                    std::sort(versions.begin(), versions.end(), [&](const std::string& a, const std::string& b) {
-                        auto pathA = PathManager::instance().versions() / a / "AppSettings.xml";
-                        auto pathB = PathManager::instance().versions() / b / "AppSettings.xml";
-                        try {
-                            return std::filesystem::last_write_time(pathA) > std::filesystem::last_write_time(pathB);
-                        } catch(...) { return a > b; }
-                    });
-                    guid = versions[0];
-                } else {
-                    setError("Failed to resolve Roblox version");
-                    return;
-                }
-            }
+            guid = rbx.getLatestVersionGUID(cfg.channel);
         }
+
+        if (guid.empty()) {
+             auto versions = rbx.getInstalledVersions();
+             if (!versions.empty()) {
+                 std::sort(versions.begin(), versions.end());
+                 guid = versions.back();
+             }
+        }
+
+        if (guid.empty()) {
+            setError("failed to resolve roblox version");
+            return;
+        }
+
+        LOG_DEBUG("resolved studio version: %s", guid.c_str());
+
         if (stop_) return;
+
         setState(LauncherState::DOWNLOADING_ROBLOX);
         if (!rbx.isInstalled(guid)) {
+            LOG_INFO("installing roblox studio version %s", guid.c_str());
             bool ok = rbx.installVersion(guid, [&](float p, std::string s) {
-                setStatus(0.2f + (p * 0.3f), "roblox: " + s);
+                setStatus(p, "roblox: " + s);
             });
             if (!ok) {
-                setError("Failed to install Roblox Studio");
+                setError("failed to install roblox studio");
                 return;
             }
+        } else {
+            LOG_DEBUG("roblox version %s already installed", guid.c_str());
+            setStatus(1.0f, "roblox: already installed");
         }
+        
         if (stop_) return;
-        setState(LauncherState::PREPARING_WINE);
-        setStatus(0.6f, "checking environment...");
+
         auto& wine = downloader::WineManager::instance();
         auto& dxvk = downloader::DxvkManager::instance();
-        auto checkSourceChange = [](const std::string& installedRoot, const std::string& repo, const std::string& tag, const std::string& metaFile) {
-            if (installedRoot.empty() || !std::filesystem::exists(installedRoot)) return true;
-            try {
-                std::ifstream f(std::filesystem::path(installedRoot) / metaFile);
-                if (!f.is_open()) return true;
-                auto j = nlohmann::json::parse(f);
-                if (j.value("repo", "") != repo) return true;
-                if (tag != "latest" && j.value("tag", "") != tag) return true;
-            } catch (...) { return true; }
-            return false;
-        };
-        if (cfg.runnerType == "Proton") {
-            if (checkSourceChange(cfg.protonSource.installedRoot, cfg.protonSource.repo, cfg.protonSource.version, "rsjfw_meta.json")) {
-                cfg.protonSource.installedRoot = "";
-            }
-            bool needInstall = cfg.protonSource.installedRoot.empty() || !std::filesystem::exists(cfg.protonSource.installedRoot);
-            if (needInstall && !cfg.protonSource.useCustomRoot) {
-                setStatus(0.65f, "downloading proton...");
-                bool ok = wine.installVersion(cfg.protonSource.repo, cfg.protonSource.version, cfg.protonSource.asset, [&](float p, std::string s){
-                    setStatus(0.6f + (p * 0.1f), "proton: " + s);
-                });
-                if (ok) {
-                    auto installs = wine.getInstalledVersions();
-                    if (!installs.empty()) {
-                        cfg.protonSource.installedRoot = installs.back().path;
-                        Config::instance().save();
-                    }
-                } else {
-                    setError("Failed to install Proton");
-                    return;
-                }
-            }
-        } else {
-            if (checkSourceChange(cfg.wineSource.installedRoot, cfg.wineSource.repo, cfg.wineSource.version, "rsjfw_meta.json")) {
-                cfg.wineSource.installedRoot = "";
-            }
-            bool needInstall = cfg.wineSource.installedRoot.empty() || !std::filesystem::exists(cfg.wineSource.installedRoot);
-            if (needInstall && !cfg.wineSource.useCustomRoot) {
-                setStatus(0.65f, "downloading wine...");
-                bool ok = wine.installVersion(cfg.wineSource.repo, cfg.wineSource.version, cfg.wineSource.asset, [&](float p, std::string s){
-                    setStatus(0.6f + (p * 0.1f), "wine: " + s);
-                });
-                if (ok) {
-                    auto installs = wine.getInstalledVersions();
-                    if (!installs.empty()) {
-                        cfg.wineSource.installedRoot = installs.back().path;
-                        Config::instance().save();
-                    }
-                } else {
-                    setError("Failed to install Wine");
-                    return;
-                }
-            }
-        }
-        if (stop_) return;
+
         setState(LauncherState::INSTALLING_DXVK);
         if (cfg.dxvk) {
-             if (checkSourceChange(cfg.dxvkSource.installedRoot, cfg.dxvkSource.repo, cfg.dxvkSource.version, "rsjfw_dxvk.json")) {
-                 cfg.dxvkSource.installedRoot = "";
-             }
-             bool needInstall = cfg.dxvkSource.installedRoot.empty() || !std::filesystem::exists(cfg.dxvkSource.installedRoot);
+             bool needInstall = cfg.dxvkSource.installedRoot.empty() || !fs::exists(cfg.dxvkSource.installedRoot);
              if (needInstall) {
-                 setStatus(0.75f, "downloading dxvk...");
+                 LOG_INFO("provisioning dxvk...");
                  bool ok = dxvk.installVersion(cfg.dxvkSource.repo, cfg.dxvkSource.version, [&](float p, std::string s) {
-                     setStatus(0.7f + (p * 0.1f), "dxvk: " + s);
+                     setStatus(p, "dxvk: " + s);
                  });
                  if (ok) {
                      auto installs = dxvk.getInstalledVersions();
@@ -229,31 +218,88 @@ void Orchestrator::worker(std::string arg) {
                          Config::instance().save();
                      }
                  }
+             } else {
+                 LOG_DEBUG("dxvk already installed at %s", cfg.dxvkSource.installedRoot.c_str());
+                 setStatus(1.0f, "dxvk: already installed");
              }
         }
+
+        if (stop_) return;
+
+        setState(LauncherState::PREPARING_WINE);
         std::string runnerRoot;
         if (cfg.runnerType == "Proton") {
-            runnerRoot = cfg.protonSource.installedRoot;
-            if (cfg.protonSource.useCustomRoot) runnerRoot = cfg.protonSource.customRootPath;
+            bool needInstall = cfg.protonSource.installedRoot.empty() || !fs::exists(cfg.protonSource.installedRoot);
+            if (needInstall && !cfg.protonSource.useCustomRoot) {
+                LOG_INFO("provisioning proton...");
+                bool ok = wine.installVersion(cfg.protonSource.repo, cfg.protonSource.version, cfg.protonSource.asset, [&](float p, std::string s){
+                    setStatus(p, "proton: " + s);
+                });
+                if (ok) {
+                    auto installs = wine.getInstalledVersions();
+                    if (!installs.empty()) {
+                        cfg.protonSource.installedRoot = installs.back().path;
+                        Config::instance().save();
+                    }
+                } else {
+                    setError("failed to install proton");
+                    return;
+                }
+            }
+            runnerRoot = cfg.protonSource.useCustomRoot ? cfg.protonSource.customRootPath : cfg.protonSource.installedRoot;
         } else {
-            runnerRoot = cfg.wineSource.installedRoot;
-            if (cfg.wineSource.useCustomRoot) runnerRoot = cfg.wineSource.customRootPath;
+            bool needInstall = cfg.wineSource.installedRoot.empty() || !fs::exists(cfg.wineSource.installedRoot);
+            if (needInstall && !cfg.wineSource.useCustomRoot) {
+                LOG_INFO("provisioning wine...");
+                bool ok = wine.installVersion(cfg.wineSource.repo, cfg.wineSource.version, cfg.wineSource.asset, [&](float p, std::string s){
+                    setStatus(p, "wine: " + s);
+                });
+                if (ok) {
+                    auto installs = wine.getInstalledVersions();
+                    if (!installs.empty()) {
+                        cfg.wineSource.installedRoot = installs.back().path;
+                        Config::instance().save();
+                    }
+                } else {
+                    setError("failed to install wine");
+                    return;
+                }
+            }
+            runnerRoot = cfg.wineSource.useCustomRoot ? cfg.wineSource.customRootPath : cfg.wineSource.installedRoot;
         }
+
         if (runnerRoot.empty()) {
              auto installs = wine.getInstalledVersions();
              if (!installs.empty()) runnerRoot = installs[0].path;
         }
+        
         if (runnerRoot.empty()) {
-            setError(cfg.runnerType == "Proton" ? "No valid Proton installation found" : "No valid Wine installation found");
+            setError("no valid runner installation found");
             return;
         }
+
+        LOG_DEBUG("selected runner root: %s", runnerRoot.c_str());
+
         if (stop_) return;
+
         std::unique_ptr<Runner> runner;
         if (cfg.runnerType == "Proton") {
             runner = Runner::createProtonRunner(runnerRoot);
         } else {
             runner = Runner::createWineRunner(runnerRoot);
         }
+        
+        if (isFile) {
+            std::string winPath = runner->resolveWindowsPath(targetPath);
+            if (!winPath.empty()) {
+                LOG_INFO("Opening local file: %s -> %s", targetPath.c_str(), winPath.c_str());
+                launchArgs.clear();
+                launchArgs.push_back(winPath);
+            } else {
+                LOG_WARN("failed to resolve windows path for: %s", targetPath.c_str());
+            }
+        }
+
         if (!cfg.launchWrapper.empty()) {
             std::vector<std::string> wrapArgs;
             std::stringstream ss(cfg.launchWrapper);
@@ -263,56 +309,93 @@ void Orchestrator::worker(std::string arg) {
                 runner->getPrefix()->setWrapper(wrapArgs);
             }
         }
-        setStatus(0.85f, "configuring runner...");
+
+        setStatus(0.85f, "preparing environment...");
+        LOG_DEBUG("running configuration step for %s", cfg.runnerType.c_str());
         if (!runner->configure([&](float p, std::string s){
-            setStatus(0.8f + (p * 0.1f), s);
+            setStatus(p, s);
         })) {
-            setError("Runner configuration failed");
+            setError("runner configuration failed");
             return;
         }
+
         if (stop_) return;
+
         setState(LauncherState::APPLYING_CONFIG);
-        setStatus(0.95f, "applying configuration...");
+        setStatus(0.95f, "applying studio configuration...");
+        LOG_DEBUG("syncing fflags and graphics overrides...");
+
+        if (runner->getPrefix()) {
+            LOG_DEBUG("forcing studio theme preference: %s", cfg.darkMode ? "dark" : "light");
+            runner->getPrefix()->registryAdd("HKCU\\Software\\Roblox\\RobloxStudio", "Theme", cfg.darkMode ? "Dark" : "Light", "REG_SZ");
+            runner->getPrefix()->registryCommit();
+        }
+        
         nlohmann::json clientSettings = Config::instance().getClientAppSettings();
-        std::filesystem::path versionDir = std::filesystem::path(PathManager::instance().versions()) / guid;
-        std::filesystem::path settingsDir = versionDir / "ClientSettings";
-        std::filesystem::create_directories(settingsDir);
+        fs::path versionDir = fs::path(PathManager::instance().versions()) / guid;
+        fs::path settingsDir = versionDir / "ClientSettings";
+        fs::create_directories(settingsDir);
         std::ofstream(settingsDir / "ClientAppSettings.json") << clientSettings.dump(4);
+
         if (cfg.dxvk) {
             auto installs = dxvk.getInstalledVersions();
             if (!installs.empty()) {
-                std::filesystem::path dxvkRoot = installs[0].path;
-                std::filesystem::path src64 = dxvkRoot / "x64";
-                if (!std::filesystem::exists(src64)) src64 = dxvkRoot / "x86_64-windows";
-                if (std::filesystem::exists(src64)) {
-                    for (const auto& entry : std::filesystem::directory_iterator(src64)) {
+                fs::path dxvkRoot = installs[0].path;
+                LOG_DEBUG("deploying dxvk dlls from %s", dxvkRoot.c_str());
+                fs::path src64 = dxvkRoot / "x64";
+                if (!fs::exists(src64)) src64 = dxvkRoot / "x86_64-windows";
+                if (fs::exists(src64)) {
+                    for (const auto& entry : fs::directory_iterator(src64)) {
                         if (entry.path().extension() == ".dll") {
-                            std::filesystem::copy_file(entry.path(), versionDir / entry.path().filename(), std::filesystem::copy_options::overwrite_existing);
+                            fs::copy_file(entry.path(), versionDir / entry.path().filename(), fs::copy_options::overwrite_existing);
                         }
                     }
                 }
             }
         }
+
         if (installOnly) {
             setState(LauncherState::FINISHED);
             setStatus(1.0f, "installation complete");
+            LOG_INFO("Headless installation finished successfully.");
             return;
         }
+
         setState(LauncherState::LAUNCHING_STUDIO);
         setStatus(1.0f, "launching studio...");
+        LOG_INFO("Ready. Executing Studio binary.");
+        
+        try {
+            auto& creds = CredentialManager::instance();
+            auto info = creds.getSecurity(runner->getPrefix());
+            if (info) {
+                LOG_INFO("Active Roblox session detected for user: %s", info->userId.c_str());
+            }
+        } catch (...) {
+            LOG_WARN("failed to audit credentials");
+        }
+
+        auto endPrep = std::chrono::steady_clock::now();
+        auto prepTime = std::chrono::duration_cast<std::chrono::seconds>(endPrep - startTime).count();
+        LOG_INFO("Total preparation time: %llds", prepTime);
+
         setState(LauncherState::RUNNING);
+        
         stream_buffer_t outBuf;
         outBuf.connect([](std::string_view s){ 
-            std::cout << "[Studio] " << s << std::flush; 
+            LOG_INFO("[Studio] %s", std::string(s).data()); 
         });
+
         auto result = runner->runStudio(guid, launchArgs, outBuf);
         if (result.exitCode != 0) {
-             setError("Roblox Studio exited with error: " + std::to_string(result.exitCode));
+             setError("studio exited with code: " + std::to_string(result.exitCode));
         } else {
              setState(LauncherState::FINISHED);
              setStatus(1.0f, "session ended");
         }
+
     } catch (const std::exception& e) {
+        LOG_ERROR("Orchestrator exception: %s", e.what());
         setError(e.what());
     }
 }

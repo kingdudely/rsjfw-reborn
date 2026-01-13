@@ -14,10 +14,12 @@
 #include "path_manager.h"
 #include "diagnostics.h"
 
+#include "rsjfw.h"
+
 namespace fs = std::filesystem;
 
 void showHelp() {
-  std::cout << "RSJFW - Roblox Studio Just Fucking Works\n\n"
+  std::cout << "RSJFW v" << RSJFW_VERSION << " - Roblox Studio Just Fucking Works\n\n"
             << "Usage:\n"
             << "  rsjfw launch [protocol]   Launch Roblox Studio\n"
             << "  rsjfw config              Open configuration UI\n"
@@ -26,6 +28,8 @@ void showHelp() {
                "launching\n"
             << "  rsjfw kill                Kill all running Studio instances\n"
             << "  rsjfw help                Show this help message\n\n"
+            << "Options:\n"
+            << "  -v, --verbose             Enable debug logging\n\n"
             << "RSJFW SUPREMACY. VINEGAR K!!!\n";
 }
 
@@ -46,13 +50,27 @@ int main(int argc, char *argv[]) {
   std::string launchArg = "";
   bool launcherMode = false;
   bool installOnly = false;
+  bool verbose = false;
 
-  if (argc > 1) {
-    std::string cmd = argv[1];
+  std::vector<std::string> args;
+  for (int i = 1; i < argc; ++i) {
+      std::string arg = argv[i];
+      if (arg == "-v" || arg == "--verbose") {
+          verbose = true;
+      } else {
+          args.push_back(arg);
+      }
+  }
+
+  logger.setVerbose(verbose);
+  logger.setLogFile(pm.root() / "rsjfw.log");
+
+  if (!args.empty()) {
+    std::string cmd = args[0];
     if (cmd == "launch") {
       launcherMode = true;
-      if (argc > 2)
-        launchArg = argv[2];
+      if (args.size() > 1)
+        launchArg = args[1];
     } else if (cmd == "config") {
       launcherMode = false;
     } else if (cmd == "install") {
@@ -62,17 +80,16 @@ int main(int argc, char *argv[]) {
       killStudio();
       return 0;
     } else if (cmd == "register") {
-      std::cout << "Registering RSJFW desktop integration...\n";
+      LOG_INFO("Registering RSJFW desktop integration...");
       auto& diag = rsjfw::Diagnostics::instance();
       diag.runChecks();
       for (const auto& r : diag.getResults()) {
-          // Force apply Integration fixes
           if (r.second.category == "Integration" && !r.second.ok && r.second.fixable) {
-              std::cout << "Applying fix for: " << r.first << "...\n";
+              LOG_INFO("Applying fix for: %s...", r.first.c_str());
               diag.fixIssue(r.first, [](float, std::string){});
           }
       }
-      std::cout << "Registration complete.\n";
+      LOG_INFO("Registration complete.");
       return 0;
     } else if (cmd == "help" || cmd == "--help" || cmd == "-h") {
       showHelp();
@@ -108,20 +125,24 @@ int main(int argc, char *argv[]) {
 
   auto &orch = rsjfw::Orchestrator::instance();
   if (launcherMode) {
-    while (true) {
-      auto state = orch.getState();
-      if (state == rsjfw::LauncherState::FINISHED ||
-          state == rsjfw::LauncherState::ERROR) {
-        break;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    auto state = orch.getState();
+    if (state != rsjfw::LauncherState::FINISHED && state != rsjfw::LauncherState::ERROR) {
+        LOG_INFO("waiting for studio session to end...");
+        while (true) {
+          state = orch.getState();
+          if (state == rsjfw::LauncherState::FINISHED ||
+              state == rsjfw::LauncherState::ERROR) {
+            break;
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
     }
   }
 
+  LOG_INFO("shutting down...");
   config.save();
   gui.shutdown();
 
   rsjfw::Orchestrator::instance().cancel();
-
   return 0;
 }

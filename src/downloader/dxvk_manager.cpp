@@ -27,6 +27,7 @@ DxvkManager::DxvkManager() {
 }
 
 std::vector<std::string> DxvkManager::fetchVersions(const std::string& repo) {
+    LOG_DEBUG("Fetching DXVK versions for %s", repo.c_str());
     auto releases = GithubClient::fetchReleases(repo);
     std::vector<std::string> tags;
     for (const auto& r : releases) tags.push_back(r.tag);
@@ -34,6 +35,7 @@ std::vector<std::string> DxvkManager::fetchVersions(const std::string& repo) {
 }
 
 bool DxvkManager::installVersion(const std::string& repo, const std::string& tag, rsjfw::ProgressCallback cb) {
+    LOG_INFO("Provisioning DXVK %s (%s)", repo.c_str(), tag.c_str());
     auto releases = GithubClient::fetchReleases(repo);
     const GithubRelease* target = nullptr;
 
@@ -63,29 +65,30 @@ bool DxvkManager::installVersion(const std::string& repo, const std::string& tag
     }
 
     if (!asset) {
-        LOG_ERROR("No suitable DXVK asset found");
+        LOG_ERROR("No suitable DXVK asset found in %s", target->tag.c_str());
         return false;
     }
 
-    if (cb) cb(0.0f, "Downloading " + asset->name);
+    LOG_DEBUG("Selected DXVK asset: %s", asset->name.c_str());
+    if (cb) cb(0.0f, "downloading " + asset->name + "...");
 
     fs::path dlPath = downloadsDir_ / asset->name;
-    if (!HTTP::download(asset->url, dlPath.string(), makeSubProgress(0.0f, 0.7f, "DL " + asset->name, cb))) {
-        LOG_ERROR("Failed to download asset: %s", asset->url.c_str());
+    if (!HTTP::download(asset->url, dlPath.string(), makeSubProgress(0.0f, 0.7f, "downloading dxvk archive...", cb))) {
+        LOG_ERROR("DXVK download failed: %s", asset->url.c_str());
         return false;
     }
 
-    if (cb) cb(0.7f, "Extracting: " + asset->name);
+    LOG_DEBUG("Extracting DXVK to %s", dxvkDir_.c_str());
+    if (cb) cb(0.7f, "extracting dxvk...");
 
     std::string safeTag = target->tag; 
-    
     fs::path installDir = dxvkDir_ / (repo == "doitsujin/dxvk" ? ("official_" + safeTag) : ("custom_" + safeTag));
     fs::create_directories(installDir);
 
     if (!ZipUtil::extract(dlPath.string(), installDir.string(), [&](float p, std::string s){
-        if (cb) cb(0.7f + (p * 0.3f), "Extracting");
+        if (cb) cb(0.7f + (p * 0.3f), "extracting files...");
     })) {
-        LOG_ERROR("Extract failed for %s", dlPath.c_str());
+        LOG_ERROR("DXVK extract failed for %s", dlPath.c_str());
         return false;
     }
     
@@ -97,6 +100,8 @@ bool DxvkManager::installVersion(const std::string& repo, const std::string& tag
         }
     }
     
+    LOG_INFO("Successfully installed DXVK to %s", root.c_str());
+
     json meta;
     meta["repo"] = repo;
     meta["tag"] = target->tag;
@@ -104,14 +109,13 @@ bool DxvkManager::installVersion(const std::string& repo, const std::string& tag
     std::ofstream(root / "rsjfw_dxvk.json") << meta.dump(4);
 
     fs::remove(dlPath);
-    if (cb) cb(1.0f, "Installed to " + root.string());
+    if (cb) cb(1.0f, "installed " + target->tag);
     return true;
 }
 
 std::vector<InstalledDxvk> DxvkManager::getInstalledVersions() {
     std::vector<InstalledDxvk> list;
     if (!fs::exists(dxvkDir_)) return list;
-
     for (const auto& entry : fs::recursive_directory_iterator(dxvkDir_)) {
         if (entry.is_directory()) {
              fs::path m = entry.path() / "rsjfw_dxvk.json";
@@ -119,21 +123,20 @@ std::vector<InstalledDxvk> DxvkManager::getInstalledVersions() {
                  InstalledDxvk d;
                  d.path = entry.path().string();
                  d.name = entry.path().parent_path().filename().string();
-                 
                  try {
                      auto j = json::parse(std::ifstream(m));
                      d.repo = j.value("repo", "");
                      d.tag = j.value("tag", "");
                  } catch(...) {}
-                 
                  list.push_back(d);
-             }
+              }
         }
     }
     return list;
 }
 
 bool DxvkManager::deleteVersion(const std::string& path) {
+    LOG_DEBUG("Deleting DXVK at %s", path.c_str());
     if (fs::exists(path)) {
         fs::remove_all(path);
         return true;

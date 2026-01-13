@@ -1,9 +1,13 @@
 #include "prefix.h"
+#include "logger.h"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <iostream>
 #include <string_view>
+#include <vector>
+#include <map>
+#include <algorithm>
 
 namespace rsjfw {
 
@@ -29,14 +33,12 @@ void Prefix::setEnvironment(const std::map<std::string, std::string>& env) {
 
 std::string Prefix::resolveBinary(const std::string& binary) const {
     if (!executorBinary_.empty()) return executorBinary_;
-
     fs::path root(installDir_);
     std::vector<fs::path> searchPaths = {
         root / binary,
         root / "bin" / binary,
         root / "files" / "bin" / binary
     };
-    
     for (const auto& p : searchPaths) {
         if (fs::exists(p)) return p.string();
     }
@@ -45,10 +47,8 @@ std::string Prefix::resolveBinary(const std::string& binary) const {
 
 void Prefix::addLibPaths(cmd::Options& opts) const {
     if (!executorBinary_.empty()) return;
-
     std::string libPath = "";
     if (char* env_p = std::getenv("LD_LIBRARY_PATH")) libPath = env_p;
-    
     fs::path r(installDir_);
     std::vector<std::string> libDirs = {
         "lib", "lib64", 
@@ -68,56 +68,62 @@ void Prefix::addLibPaths(cmd::Options& opts) const {
     if (!libPath.empty()) opts.env["LD_LIBRARY_PATH"] = libPath;
 }
 
+static std::string expandHive(const std::string& key) {
+    std::string out = key;
+    std::string upper = key;
+    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+    
+    if (upper.find("HKLM") == 0) out.replace(0, 4, "HKEY_LOCAL_MACHINE");
+    else if (upper.find("HKCU") == 0) out.replace(0, 4, "HKEY_CURRENT_USER");
+    else if (upper.find("HKCR") == 0) out.replace(0, 4, "HKEY_CLASSES_ROOT");
+    else if (upper.find("HKU") == 0) out.replace(0, 3, "HKEY_USERS");
+    return out;
+}
+
 bool Prefix::init(ProgressCb cb) {
-    if (cb) cb(0.1f, "Checking prefix...");
-
+    if (cb) cb(0.1f, "verifying prefix...");
     if (!fs::exists(fs::path(rootDir_) / "system.reg")) {
-        if (cb) cb(0.3f, "Initializing prefix...");
-
+        if (cb) cb(0.3f, "bootstrapping wine prefix...");
         cmd::Options opts;
         opts.env = baseEnv_;
         opts.env["WINEPREFIX"] = rootDir_;
         opts.env["WINEARCH"] = "win64";
         opts.env["WINEDEBUG"] = "-all";
         addLibPaths(opts);
-
         std::vector<std::string> fullArgs = wrapperArgs_;
         std::string binary;
-
         if (executorBinary_.empty()) {
             binary = resolveBinary("wineboot");
             fullArgs.push_back("-u");
         } else {
             binary = executorBinary_;
             fullArgs.insert(fullArgs.end(), executorPreArgs_.begin(), executorPreArgs_.end());
-            fullArgs.push_back("wineboot");
-            fullArgs.push_back("-u");
+            if (binary.find("proton") != std::string::npos) fullArgs.push_back("/usr/bin/true");
+            else {
+                fullArgs.push_back("wineboot");
+                fullArgs.push_back("-u");
+            }
         }
-
-        cmd::Command::runSync(binary, fullArgs, opts);
+        auto res = cmd::Command::runSync(binary, fullArgs, opts);
+        if (res.exitCode != 0 && res.exitCode != 120) return false;
     }
-
-    if (cb) cb(1.0f, "Prefix ready.");
+    if (cb) cb(1.0f, "prefix ready.");
     return true;
 }
 
 bool Prefix::wine(const std::string& exe, const std::vector<std::string>& args,
-                  std::function<void(const std::string&)> onOutput,
-                  const std::string& cwd, bool wait,
-                  const std::map<std::string, std::string>& extraEnv) {
+                   std::function<void(const std::string&)> onOutput,
+                   const std::string& cwd, bool wait,
+                   const std::map<std::string, std::string>& extraEnv) {
     cmd::Options opts;
     opts.env = baseEnv_;
     for (const auto& [k, v] : extraEnv) opts.env[k] = v;
-    
     opts.env["WINEPREFIX"] = rootDir_;
     opts.env["WINEARCH"] = "win64";
     if (!cwd.empty()) opts.cwd = cwd;
-    
     addLibPaths(opts);
-
     std::vector<std::string> fullArgs = wrapperArgs_;
     std::string binary;
-
     if (executorBinary_.empty()) {
         binary = resolveBinary("wine");
         fullArgs.push_back(exe);
@@ -128,20 +134,15 @@ bool Prefix::wine(const std::string& exe, const std::vector<std::string>& args,
         fullArgs.push_back(exe);
         fullArgs.insert(fullArgs.end(), args.begin(), args.end());
     }
-
     if (!wait) {
         cmd::Command::runAsync(binary, fullArgs, opts, nullptr);
         return true;
     }
-
     stream_buffer_t buf;
     buf.connect([&](const std::string_view chunk) {
         if (onOutput) onOutput(std::string(chunk));
     });
     auto res = cmd::Command::runSync(binary, fullArgs, opts, onOutput ? &buf : nullptr);
-
-    if (onOutput) onOutput(""); 
-
     return res.exitCode == 0;
 }
 
@@ -149,10 +150,8 @@ bool Prefix::kill() {
     cmd::Options opts;
     opts.env = baseEnv_;
     opts.env["WINEPREFIX"] = rootDir_;
-    
     std::vector<std::string> fullArgs = wrapperArgs_;
     std::string binary;
-
     if (executorBinary_.empty()) {
         binary = resolveBinary("wineserver");
         fullArgs.push_back("-k");
@@ -162,7 +161,6 @@ bool Prefix::kill() {
         fullArgs.push_back("wineserver");
         fullArgs.push_back("-k");
     }
-
     auto res = cmd::Command::runSync(binary, fullArgs, opts);
     return res.exitCode == 0;
 }
@@ -174,21 +172,22 @@ void Prefix::registryAdd(const std::string& k, const std::string& n, const std::
 std::string Prefix::generateRegFile() const {
     std::stringstream ss;
     ss << "Windows Registry Editor Version 5.00\r\n\r\n";
-
     std::string lastKey;
     for (const auto& e : pendingReg_) {
-        if (e.key != lastKey) {
-            ss << "[" << e.key << "]\r\n";
-            lastKey = e.key;
+        std::string key = expandHive(e.key);
+        if (key != lastKey) {
+            ss << "[" << key << "]\r\n";
+            lastKey = key;
         }
         ss << (e.valueName.empty() ? "@" : "\"" + e.valueName + "\"") << "=";
-
         if (e.type == "REG_DWORD") {
             try {
                 char buf[16];
                 snprintf(buf, 16, "dword:%08lx", std::stoul(e.value, nullptr, 0));
                 ss << buf;
             } catch (...) { ss << "dword:00000000"; }
+        } else if (e.type == "REG_BINARY") {
+             ss << "hex:" << e.value;
         } else {
             std::string esc = e.value;
             size_t pos = 0;
@@ -204,21 +203,17 @@ std::string Prefix::generateRegFile() const {
 
 bool Prefix::registryCommit() {
     if (pendingReg_.empty()) return true;
-
     auto regPath = fs::path(rootDir_) / "batch.reg";
     {
         std::ofstream ofs(regPath);
         ofs << generateRegFile();
     }
-
     cmd::Options opts;
     opts.env = baseEnv_;
     opts.env["WINEPREFIX"] = rootDir_;
     addLibPaths(opts);
-
     std::vector<std::string> fullArgs = wrapperArgs_;
     std::string binary;
-
     if (executorBinary_.empty()) {
         binary = resolveBinary("wine");
         fullArgs.push_back("regedit.exe");
@@ -231,74 +226,92 @@ bool Prefix::registryCommit() {
         fullArgs.push_back("/s");
         fullArgs.push_back("Z:" + regPath.string());
     }
-
-    auto res = cmd::Command::runSync(binary, fullArgs, opts);
-
+    auto res = cmd::Command::runSync(binary, fullArgs, opts, nullptr);
     fs::remove(regPath);
     if (res.exitCode == 0) pendingReg_.clear();
     return res.exitCode == 0;
 }
 
 std::optional<std::string> Prefix::registryQuery(const std::string& key, const std::string& name) {
+    std::string fullKey = expandHive(key);
+    
+    cmd::Options checkOpts;
+    checkOpts.env = baseEnv_;
+    checkOpts.env["WINEPREFIX"] = rootDir_;
+    checkOpts.env["WINEDEBUG"] = "-all";
+    addLibPaths(checkOpts);
+    
+    std::vector<std::string> checkArgs = wrapperArgs_;
+    if (executorBinary_.empty()) {
+        checkArgs.push_back("reg.exe");
+        checkArgs.push_back("query");
+        checkArgs.push_back(fullKey);
+    } else {
+        checkArgs.insert(checkArgs.end(), executorPreArgs_.begin(), executorPreArgs_.end());
+        checkArgs.push_back("reg.exe");
+        checkArgs.push_back("query");
+        checkArgs.push_back(fullKey);
+    }
+    
+    auto checkRes = cmd::Command::runSync(executorBinary_.empty() ? resolveBinary("wine") : executorBinary_, checkArgs, checkOpts);
+    if (checkRes.exitCode != 0) {
+        return std::nullopt;
+    }
+
+    fs::path tmpFile = fs::path(rootDir_) / "query.reg";
     cmd::Options opts;
     opts.env = baseEnv_;
     opts.env["WINEPREFIX"] = rootDir_;
-    opts.mergeStdoutStderr = true;
     addLibPaths(opts);
-
-    std::vector<std::string> fullArgs = wrapperArgs_;
+    std::vector<std::string> args = wrapperArgs_;
     std::string binary;
-
     if (executorBinary_.empty()) {
         binary = resolveBinary("wine");
-        fullArgs.push_back("reg");
-        fullArgs.push_back("query");
-        fullArgs.push_back(key);
-        fullArgs.push_back("/v");
-        fullArgs.push_back(name);
+        args.push_back("regedit.exe");
+        args.push_back("/e");
+        args.push_back("Z:" + tmpFile.string());
+        args.push_back(fullKey);
     } else {
         binary = executorBinary_;
-        fullArgs.insert(fullArgs.end(), executorPreArgs_.begin(), executorPreArgs_.end());
-        fullArgs.push_back("reg");
-        fullArgs.push_back("query");
-        fullArgs.push_back(key);
-        fullArgs.push_back("/v");
-        fullArgs.push_back(name);
+        args.insert(args.end(), executorPreArgs_.begin(), executorPreArgs_.end());
+        args.push_back("regedit.exe");
+        args.push_back("/e");
+        args.push_back("Z:" + tmpFile.string());
+        args.push_back(fullKey);
     }
-
-    stream_buffer_t buf;
-    auto res = cmd::Command::runSync(binary, fullArgs, opts, &buf);
-
-    if (res.exitCode != 0) return std::nullopt;
-
-    std::string output = buf.view();
-    std::istringstream iss(output);
+    auto res = cmd::Command::runSync(binary, args, opts);
+    if (res.exitCode != 0 || !fs::exists(tmpFile)) {
+        if (fs::exists(tmpFile)) fs::remove(tmpFile);
+        return std::nullopt;
+    }
+    std::ifstream f(tmpFile);
     std::string line;
-
-    while (std::getline(iss, line)) {
-        if (line.find(name) != std::string::npos) {
-            size_t typePos = line.find("REG_");
-            if (typePos != std::string::npos) {
-                size_t valStart = line.find_first_not_of(" \t", typePos + 6);
-                if (valStart != std::string::npos) {
-                    std::string val = line.substr(valStart);
-                    val.erase(val.find_last_not_of(" \t\r\n") + 1);
-                    return val;
-                }
+    std::string searchName = "\"" + name + "\"=";
+    while (std::getline(f, line)) {
+        if (line.find(searchName) == 0) {
+            std::string val = line.substr(searchName.length());
+            if (val.size() >= 2 && val.front() == '"' && val.back() == '"') {
+                val = val.substr(1, val.length() - 2);
             }
+            fs::remove(tmpFile);
+            size_t pos = 0;
+            while ((pos = val.find("\\\\", pos)) != std::string::npos) {
+                val.replace(pos, 2, "\\");
+                pos += 1;
+            }
+            return val;
         }
     }
-
+    fs::remove(tmpFile);
     return std::nullopt;
 }
 
 bool Prefix::installDxvk(const std::string& dxvkRoot) {
     fs::path root(dxvkRoot);
     if (!fs::exists(root)) return false;
-
+    LOG_INFO("injecting dxvk into prefix...");
     fs::path sys32 = fs::path(rootDir_) / "drive_c" / "windows" / "system32";
     fs::path syswow = fs::path(rootDir_) / "drive_c" / "windows" / "syswow64";
-
     auto installDlls = [&](fs::path src, fs::path dst) {
         if (!fs::exists(src) || !fs::exists(dst)) return;
         for (const auto& entry : fs::directory_iterator(src)) {
@@ -307,25 +320,18 @@ bool Prefix::installDxvk(const std::string& dxvkRoot) {
                 try {
                     if (fs::exists(target)) fs::remove(target);
                     fs::copy_file(entry.path(), target);
-                    registryAdd("HKCU\\Software\\Wine\\DllOverrides", 
-                                entry.path().stem().string(), 
-                                "native", "REG_SZ");
+                    registryAdd("HKCU\\Software\\Wine\\DllOverrides", entry.path().stem().string(), "native", "REG_SZ");
                 } catch(...) {}
             }
         }
     };
-
     if (fs::exists(root / "x64")) {
         installDlls(root / "x64", sys32);
         installDlls(root / "x32", syswow);
     } else if (fs::exists(root / "x86_64-windows")) {
         installDlls(root / "x86_64-windows", sys32);
         installDlls(root / "i386-windows", syswow);
-    } else if (fs::exists(root / "files/lib/wine/dxvk/x86_64-windows")) {
-        installDlls(root / "files/lib/wine/dxvk/x86_64-windows", sys32);
-        installDlls(root / "files/lib/wine/dxvk/i386-windows", syswow);
     }
-    
     return registryCommit();
 }
 

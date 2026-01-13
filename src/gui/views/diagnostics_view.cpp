@@ -1,6 +1,7 @@
 #include "gui/views/diagnostics_view.h"
 #include "diagnostics.h"
 #include <imgui.h>
+#include <thread>
 
 namespace rsjfw {
 
@@ -11,7 +12,9 @@ void DiagnosticsView::render() {
     ImGui::Dummy(ImVec2(0, 10));
     
     if (ImGui::Button("run full scan", ImVec2(150, 35))) {
-        Diagnostics::instance().runChecks();
+        std::thread([](){
+            Diagnostics::instance().runChecks();
+        }).detach();
     }
     
     ImGui::Dummy(ImVec2(0, 20));
@@ -25,8 +28,8 @@ void DiagnosticsView::render() {
     
     if (ImGui::BeginTable("DiagTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
         ImGui::TableSetupColumn("status", ImGuiTableColumnFlags_WidthFixed, 80);
-        ImGui::TableSetupColumn("check name", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("message / action", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("check name", ImGuiTableColumnFlags_WidthStretch, 0.4f);
+        ImGui::TableSetupColumn("message / action", ImGuiTableColumnFlags_WidthStretch, 0.6f);
         ImGui::TableHeadersRow();
         
         for (auto& r : results) {
@@ -37,25 +40,39 @@ void DiagnosticsView::render() {
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "pass");
             } else if (r.second.ignored) {
                 ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "ignored");
+            } else if (r.second.isFixing) {
+                ImGui::TextColored(ImVec4(0.2f, 0.6f, 1.0f, 1.0f), "fixing");
             } else {
                 ImGui::TextColored(ImVec4(0.9f, 0.2f, 0.2f, 1.0f), "fail");
             }
             
             ImGui::TableSetColumnIndex(1);
             ImGui::Text("%s", r.first.c_str());
+            if (!r.second.ok && !r.second.failReason.empty()) {
+                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.6f);
+                ImGui::TextWrapped("%s", r.second.failReason.c_str());
+                ImGui::PopStyleVar();
+            }
             
             ImGui::TableSetColumnIndex(2);
-            ImGui::Text("%s", r.second.message.c_str());
-            if (!r.second.ok && r.second.fixable) {
-                ImGui::SameLine();
-                std::string label = "fix##" + r.first;
-                if (ImGui::Button(label.c_str())) {
-                    diag.fixIssue(r.first, [](float, std::string){});
-                }
-                ImGui::SameLine();
-                std::string ignoreLabel = (r.second.ignored ? "unignore##" : "ignore##") + r.first;
-                if (ImGui::Button(ignoreLabel.c_str())) {
-                    r.second.ignored = !r.second.ignored;
+            if (r.second.isFixing) {
+                ImGui::ProgressBar(r.second.fixProgress, ImVec2(-1, 0), r.second.fixStatus.c_str());
+            } else {
+                ImGui::Text("%s", r.second.message.c_str());
+                if (!r.second.ok && r.second.fixable) {
+                    ImGui::SameLine();
+                    std::string label = "fix##" + r.first;
+                    if (ImGui::Button(label.c_str())) {
+                        std::string name = r.first;
+                        std::thread([name](){
+                            Diagnostics::instance().fixIssue(name, [](float, std::string){});
+                        }).detach();
+                    }
+                    ImGui::SameLine();
+                    std::string ignoreLabel = (r.second.ignored ? "unignore##" : "ignore##") + r.first;
+                    if (ImGui::Button(ignoreLabel.c_str())) {
+                        r.second.ignored = !r.second.ignored;
+                    }
                 }
             }
         }

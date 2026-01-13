@@ -93,7 +93,7 @@ void RunnerView::renderWineConfig() {
             lastWineRepo_ = src.repo;
         }
 
-        const char* presets[] = { "vinegarhq/wine-builds", "GloriousEggroll/wine-ge-custom" };
+        const char* presets[] = { "vinegarhq/wine-builds", "gloriouseggroll/wine-ge-custom" };
         static int currentPreset = -1;
         ImGui::Text("preset repo");
         ImGui::SameLine(180);

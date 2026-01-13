@@ -6,6 +6,7 @@
 #include <mutex>
 #include <fstream>
 #include <iostream>
+#include <filesystem>
 
 namespace rsjfw {
 
@@ -15,6 +16,8 @@ namespace rsjfw {
 
         static Logger& instance();
 
+        void setVerbose(bool v) { verbose_ = v; }
+        void setLogFile(const std::filesystem::path& p);
 
         void log(Level lvl, const char* file, const char* func, const char* fmt, ...);
 
@@ -34,7 +37,6 @@ namespace rsjfw {
         Logger();
         ~Logger();
 
-
         void clearProgressLines();
         void drawBars();
         int termWidth();
@@ -45,13 +47,12 @@ namespace rsjfw {
         std::mutex mtx_;
         std::ofstream file_;
         std::vector<ProgressBar> bars_;
-
+        bool verbose_ = false;
 
         int activeLines_ = 0;
 
         const std::string RESET = "\033[0m";
     };
-
 
 #define LOG_ERROR(fmt, ...) rsjfw::Logger::instance().log(rsjfw::Logger::ERR, __FILE__, __FUNCTION__, fmt, ##__VA_ARGS__)
 #define LOG_WARN(fmt, ...)  rsjfw::Logger::instance().log(rsjfw::Logger::WARN,  __FILE__, __FUNCTION__, fmt, ##__VA_ARGS__)

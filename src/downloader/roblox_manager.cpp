@@ -7,6 +7,15 @@
 #include <unordered_map>
 #include <thread>
 #include <iostream>
+#include <queue>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+#include <map>
+#include <sstream>
+#include <vector>
+#include <algorithm>
+#include <iomanip>
 
 namespace rsjfw::downloader {
 
@@ -95,6 +104,8 @@ bool RobloxManager::downloadPackage(const std::string& guid, const RobloxPackage
             fs::remove(cachePath);
             return false;
         }
+    } else if (cb) {
+        cb(1.0f, "0.0 B/s");
     }
     return true;
 }
@@ -107,73 +118,145 @@ bool RobloxManager::extractPackage(const std::string& guid, const RobloxPackage&
     return ZipUtil::extract(cachePath.string(), destSub.string(), cb);
 }
 
+struct ThreadInfo {
+    std::string packageName;
+    std::string currentFile;
+    double speedBytes = 0;
+    bool isExtracting = false;
+};
+
 struct TaskState {
     std::mutex mtx;
     std::condition_variable cv;
-    int activeDownloads = 0;
-    int activeExtracts = 0;
     std::queue<RobloxPackage> downloadQueue;
     std::queue<RobloxPackage> extractQueue;
     std::atomic<int> completedPackages{0};
     int totalPackages = 0;
+    int activeDownloads = 0;
     bool failed = false;
+    std::map<std::thread::id, ThreadInfo> activeThreads;
 };
 
+static double parseSpeed(const std::string& speedStr) {
+    std::stringstream ss(speedStr);
+    double val;
+    std::string unit;
+    if (!(ss >> val >> unit)) return 0;
+    if (unit == "KB/s") return val * 1024.0;
+    if (unit == "MB/s") return val * 1024.0 * 1024.0;
+    return val;
+}
+
+static std::string formatSpeed(double bytesPerSec) {
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(1);
+    if (bytesPerSec < 1024) ss << (long long)bytesPerSec << " B/s";
+    else if (bytesPerSec < 1024 * 1024) ss << (bytesPerSec / 1024.0) << " KB/s";
+    else ss << (bytesPerSec / (1024.0 * 1024.0)) << " MB/s";
+    return ss.str();
+}
+
+static void updateMainProgress(std::shared_ptr<TaskState> state, rsjfw::ProgressCallback mainCb) {
+    if (!mainCb) return;
+    std::lock_guard<std::mutex> lk(state->mtx);
+    float p = (float)state->completedPackages / state->totalPackages;
+    std::vector<std::string> downloads;
+    std::vector<std::string> extracts;
+    double totalSpeed = 0;
+    for (const auto& [tid, info] : state->activeThreads) {
+        if (info.isExtracting) {
+            std::string s = info.packageName;
+            if (!info.currentFile.empty()) s += " (" + info.currentFile + ")";
+            extracts.push_back(s);
+        }
+        else {
+            downloads.push_back(info.packageName);
+            totalSpeed += info.speedBytes;
+        }
+    }
+    std::stringstream ss;
+    ss << "Installed " << state->completedPackages << "/" << state->totalPackages << " (" << formatSpeed(totalSpeed);
+    if (!downloads.empty()) {
+        ss << ", DL: ";
+        for (size_t i = 0; i < downloads.size(); ++i) ss << downloads[i] << (i == downloads.size() - 1 ? "" : ", ");
+    }
+    if (!extracts.empty()) {
+        ss << " | EX: ";
+        for (size_t i = 0; i < extracts.size(); ++i) ss << extracts[i] << (i == extracts.size() - 1 ? "" : ", ");
+    }
+    ss << ")";
+    mainCb(p, ss.str());
+}
+
 static void workerLoop(std::shared_ptr<TaskState> state, int type, std::string guid, std::string targetDir, RobloxManager* mgr, rsjfw::ProgressCallback mainCb) {
+    auto tid = std::this_thread::get_id();
     while (true) {
         RobloxPackage pkg;
         bool isDownload = (type == 0);
-
         {
             std::unique_lock<std::mutex> lk(state->mtx);
-            if (state->failed) return;
-            if (state->completedPackages == state->totalPackages) return;
-
+            if (state->failed || state->completedPackages >= state->totalPackages) return;
             if (isDownload) {
                 if (state->downloadQueue.empty()) return;
                 pkg = state->downloadQueue.front();
                 state->downloadQueue.pop();
-                state->activeDownloads++;
-            } else {
-                state->cv.wait(lk, [&] {
-                    return !state->extractQueue.empty() || state->failed ||
+            state->activeDownloads++;
+            state->activeThreads[tid] = {pkg.name, "", 0, false};
+        } else {
+            state->cv.wait(lk, [&] {
+                    return !state->extractQueue.empty() || state->failed || state->completedPackages >= state->totalPackages ||
                            (state->downloadQueue.empty() && state->activeDownloads == 0);
                 });
-
-                if (state->failed || (state->extractQueue.empty() && state->downloadQueue.empty() && state->activeDownloads == 0))
+                if (state->failed || state->completedPackages >= state->totalPackages || (state->extractQueue.empty() && state->downloadQueue.empty() && state->activeDownloads == 0))
                     return;
-
-                pkg = state->extractQueue.front();
-                state->extractQueue.pop();
-                state->activeExtracts++;
-            }
+                if (state->extractQueue.empty()) continue;
+            pkg = state->extractQueue.front();
+            state->extractQueue.pop();
+            state->activeThreads[tid] = {pkg.name, "", 0, true};
         }
-
-        bool ok = false;
-        if (isDownload) ok = mgr->downloadPackage(guid, pkg, targetDir, nullptr);
-        else ok = mgr->extractPackage(guid, pkg, targetDir, nullptr);
-
+    }
+    bool ok = false;
+        if (isDownload) {
+            auto subCb = [&](float, std::string speedStr) {
+                {
+                    std::lock_guard<std::mutex> lk(state->mtx);
+                    state->activeThreads[tid].speedBytes = parseSpeed(speedStr);
+                }
+                updateMainProgress(state, mainCb);
+            };
+            ok = mgr->downloadPackage(guid, pkg, targetDir, subCb);
+        } else {
+            auto subCb = [&](float, std::string s) {
+                {
+                    std::lock_guard<std::mutex> lk(state->mtx);
+                    // s format is "extracting: filename"
+                    if (s.find("extracting: ") == 0) {
+                        state->activeThreads[tid].currentFile = s.substr(12);
+                    } else {
+                        state->activeThreads[tid].currentFile = s;
+                    }
+                }
+                updateMainProgress(state, mainCb);
+            };
+            ok = mgr->extractPackage(guid, pkg, targetDir, subCb);
+        }
         {
             std::unique_lock<std::mutex> lk(state->mtx);
+            state->activeThreads.erase(tid);
             if (!ok) {
                 state->failed = true;
                 state->cv.notify_all();
                 return;
             }
-
             if (isDownload) {
                 state->activeDownloads--;
                 state->extractQueue.push(pkg);
-                state->cv.notify_all();
             } else {
-                state->activeExtracts--;
                 state->completedPackages++;
-                if (mainCb) {
-                    float p = (float)state->completedPackages / state->totalPackages;
-                    mainCb(p, "Installed " + std::to_string(state->completedPackages) + "/" + std::to_string(state->totalPackages));
-                }
             }
+            state->cv.notify_all();
         }
+        updateMainProgress(state, mainCb);
     }
 }
 
@@ -182,33 +265,28 @@ bool RobloxManager::installVersion(const std::string& guid, rsjfw::ProgressCallb
         if (cb) cb(1.0f, "Version already installed");
         return true;
     }
-
     try {
-        if (cb) cb(0.0f, "Fetching Manifest...");
+        if (cb) cb(0.0f, "fetching manifest...");
         auto pkgs = RobloxAPI::getPackageManifest(guid);
-
+        std::sort(pkgs.begin(), pkgs.end(), [](const RobloxPackage& a, const RobloxPackage& b) {
+            return a.packedSize < b.packedSize;
+        });
         size_t total = pkgs.size();
         fs::path targetDir = versionsDir_ / guid;
         fs::create_directories(targetDir);
-
         auto state = std::make_shared<TaskState>();
         state->totalPackages = total;
         for (const auto& p : pkgs) state->downloadQueue.push(p);
-
         std::vector<std::thread> threads;
         for (int i = 0; i < 4; ++i) threads.emplace_back(workerLoop, state, 0, guid, targetDir.string(), this, cb);
         for (int i = 0; i < 3; ++i) threads.emplace_back(workerLoop, state, 1, guid, targetDir.string(), this, cb);
         for (auto& t : threads) t.join();
-
         if (state->failed) return false;
-
         fs::path settingsPath = targetDir / "AppSettings.xml";
         std::ofstream ofs(settingsPath);
         ofs << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<Settings>\r\n\t<ContentFolder>content</ContentFolder>\r\n\t<BaseUrl>http://www.roblox.com</BaseUrl>\r\n</Settings>\r\n";
-        
         if (cb) cb(1.0f, "Complete");
         return true;
-
     } catch (const std::exception& e) {
         LOG_ERROR("Install Error: %s", e.what());
         return false;

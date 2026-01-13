@@ -12,8 +12,12 @@ struct HealthStatus {
     bool ok;
     std::string message;
     std::string detail;
+    std::string failReason;
     bool fixable = false;
     bool ignored = false;
+    bool isFixing = false;
+    float fixProgress = 0.0f;
+    std::string fixStatus;
     std::function<void(std::function<void(float, std::string)>)> fixAction;
     std::string category = "General";
 };

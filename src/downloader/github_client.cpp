@@ -1,5 +1,6 @@
 #include "downloader/github_client.h"
 #include "http.h"
+#include "logger.h"
 #include <nlohmann/json.hpp>
 
 namespace rsjfw::downloader {

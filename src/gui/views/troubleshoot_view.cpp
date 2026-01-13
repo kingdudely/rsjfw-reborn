@@ -11,24 +11,23 @@ namespace fs = std::filesystem;
 
 void TroubleshootView::render() {
     auto& gen = Config::instance().getGeneral();
-    ImGui::Text("Maintenance & Repair");
-    ImGui::TextColored(ImVec4(0.9f, 0.4f, 0.0f, 1.0f), "Warning: Destructive actions ahead.");
+    ImGui::Text("maintenance & repair");
+    ImGui::TextColored(ImVec4(0.9f, 0.4f, 0.0f, 1.0f), "warning: destructive actions ahead.");
     ImGui::Separator();
     ImGui::Dummy(ImVec2(0, 10));
     
-
     float w = ImGui::GetContentRegionAvail().x;
     float h = 45.0f;
 
-    if (ImGui::Button("Wipe Wine Prefix", ImVec2(w, h))) {
+    if (ImGui::Button("wipe wine prefix", ImVec2(w, h))) {
         ImGui::OpenPopup("Confirm Prefix Wipe");
     }
     
     if (ImGui::BeginPopupModal("Confirm Prefix Wipe", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("This will delete all registry and system files in the prefix.");
-        ImGui::Text("Installed versions will remain, but dependencies will re-install.");
+        ImGui::Text("this will delete all registry and system files in the prefix.");
+        ImGui::Text("installed versions will remain, but dependencies will re-install.");
         
-        if (ImGui::Button("Proceed", ImVec2(120, 0))) {
+        if (ImGui::Button("proceed", ImVec2(120, 0))) {
             auto& pm = PathManager::instance();
             try {
                 if (gen.runnerType == "Proton") fs::remove_all(pm.root() / "proton_data");
@@ -37,13 +36,13 @@ void TroubleshootView::render() {
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(120, 0))) ImGui::CloseCurrentPopup();
+        if (ImGui::Button("cancel", ImVec2(120, 0))) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
     
     ImGui::Dummy(ImVec2(0, 5));
     
-    if (ImGui::Button("Clear Shader Cache", ImVec2(w, h))) {
+    if (ImGui::Button("clear shader cache", ImVec2(w, h))) {
         auto& pm = PathManager::instance();
         try {
             for (auto& entry : fs::recursive_directory_iterator(pm.root())) {
@@ -54,7 +53,7 @@ void TroubleshootView::render() {
     
     ImGui::Dummy(ImVec2(0, 5));
 
-    if (ImGui::Button("Purge Downloads", ImVec2(w, h))) {
+    if (ImGui::Button("purge downloads", ImVec2(w, h))) {
         try {
             fs::remove_all(PathManager::instance().cache());
             fs::create_directories(PathManager::instance().cache());
@@ -63,7 +62,7 @@ void TroubleshootView::render() {
 
     ImGui::Dummy(ImVec2(0, 5));
 
-    if (ImGui::Button("Factory Reset FFlags", ImVec2(w, h))) {
+    if (ImGui::Button("factory reset fflags", ImVec2(w, h))) {
         Config::instance().getFFlags().clear();
     }
     

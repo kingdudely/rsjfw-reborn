@@ -45,6 +45,7 @@ public:
                                            const std::string &name);
 
   bool installDxvk(const std::string& dxvkRoot);
+  void addLibPaths(cmd::Options& opts) const;
 
   std::string getPath() const { return rootDir_; }
   std::string getInstallDir() const { return installDir_; }
@@ -61,7 +62,6 @@ private:
 
   std::string resolveBinary(const std::string &binary) const;
   std::string generateRegFile() const;
-  void addLibPaths(cmd::Options& opts) const;
 };
 
 }
