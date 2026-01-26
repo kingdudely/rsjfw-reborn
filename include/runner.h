@@ -20,6 +20,7 @@ namespace rsjfw
 
         static std::unique_ptr<Runner> createWineRunner(const std::string& wineRootPath);
         static std::unique_ptr<Runner> createProtonRunner(const std::string& protonRootPath);
+        static std::unique_ptr<Runner> createUmuRunner(const std::string& protonRootPath);
 
         virtual bool configure(ProgressCb cb = nullptr) = 0;
 
@@ -39,6 +40,7 @@ namespace rsjfw
         std::map<std::string, std::string> env_;
 
         void addBaseEnv();
+        bool provisionCommonDependencies(ProgressCb cb);
     };
 }
 

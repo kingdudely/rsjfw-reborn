@@ -44,7 +44,9 @@ namespace rsjfw::cmd {
         static void unregisterPid(pid_t pid);
 
         static std::set<pid_t> activePids_;
+        static std::set<pid_t> allPgids_;
         static std::mutex pidsMtx_;
+        static bool shuttingDown_;
     };
 }
 

@@ -2,7 +2,7 @@
 #define HOME_VIEW_H
 
 #include "gui/view.h"
-#include "diagnostics.h"
+#include "credential_manager.h"
 #include <vector>
 #include <string>
 #include <atomic>
@@ -17,10 +17,12 @@ public:
     const char* getName() const override { return "Home"; }
 
 private:
-    std::atomic<float> fixProgress_{-1.0f};
-    std::string fixStatus_;
-    std::mutex statusMtx_;
+    std::vector<RobloxUser> cachedUsers_;
+    std::atomic<bool> refreshing_{false};
+    std::mutex usersMtx_;
+    void refreshUsers();
 };
+
 
 }
 

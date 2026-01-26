@@ -1,29 +1,38 @@
 #ifndef CREDENTIAL_MANAGER_H
 #define CREDENTIAL_MANAGER_H
 
+#include "prefix.h"
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
-#include <memory>
-#include "prefix.h"
+#include <map>
 
 namespace rsjfw {
 
-class CredentialManager {
-public:
-    static CredentialManager& instance();
-
-    struct SecurityInfo {
-        std::string userId;
-        std::string securityCookie;
-    };
-
-    std::optional<SecurityInfo> getSecurity(std::shared_ptr<Prefix> prefix);
-
-private:
-    CredentialManager() = default;
-    std::string keyStream(const std::vector<uint8_t>& key, const std::vector<uint8_t>& data);
+struct RobloxUser {
+    std::string userId;
+    std::string username;
+    std::string profilePicUrl;
 };
 
-}
+class CredentialManager {
+public:
+  static CredentialManager &instance();
+
+  struct SecurityInfo {
+    std::string userId;
+    std::string securityCookie;
+  };
+
+  std::optional<SecurityInfo> getSecurity(std::shared_ptr<Prefix> prefix);
+  std::vector<RobloxUser> getLoggedInUsers(std::shared_ptr<Prefix> prefix);
+  void syncAllRunners(std::shared_ptr<Prefix> activePrefix);
+
+private:
+  CredentialManager() = default;
+};
+
+} // namespace rsjfw
 
 #endif

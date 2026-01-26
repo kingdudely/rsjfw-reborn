@@ -29,6 +29,9 @@ public:
 
     void startLaunch(const std::string& arg);
     void cancel();
+    void shutdown();
+    void setWineDebug(bool enable) { wineDebug_ = enable; }
+    bool isWineDebugEnabled() const { return wineDebug_; }
 
     LauncherState getState() const { return state_; }
     float getProgress() const { return progress_; }
@@ -52,6 +55,7 @@ private:
     
     std::thread workerThread_;
     std::atomic<bool> stop_{false};
+    std::atomic<bool> wineDebug_{false};
 };
 
 }

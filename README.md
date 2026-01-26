@@ -1,33 +1,35 @@
-# RSJFW **RE***BOR***N**
+# RSJFW Reborn
 **Roblox Studio Just Fucking Works**. REBORN!
+
+![Logo](assets/logo.png)
 
 ![Badge](https://img.shields.io/badge/C%2B%2B-20-blue) ![Badge](https://img.shields.io/badge/Vulkan-Enabled-red) ![Badge](https://img.shields.io/badge/Zero-Latency-brightgreen)
 
-The high-performance, native C++20 Linux environment for Roblox Studio. Built to obliterate Python/Shell/*Go* wrappers with raw speed and engineering precision.
+The high-performance, native C++20 Linux environment for Roblox Studio. Built to obliterate Python/Shell/Go wrappers with raw speed and engineering precision.
 
-> **Note**: While RSJFW is an independent, clean-room engineered solution designed for maximum performance, we acknowledge the prior work of the Vinegar project which demonstrated the viability of Wine-based Roblox environments on Linux. 
-> **Also**: RSJFW Reborn is in V1 again. Expect bugs, but not gonna lie it should be stabler now.
+RSJFW is a clean-room engineered solution designed for maximum performance and stability. It's an engine, not a simple command runner.
 
-## Why RSJFW? (Vinegar K)
-Legacy wrappers are slow, bloated, and prone to breakage. RSJFW is an engine, not a simple command runner.
+## Why RSJFW?
+Legacy wrappers are slow, bloated, and prone to breakage. RSJFW is built for the absolute best experience.
 
 | Feature | Legacy Wrappers | RSJFW |
 |---------|-----------------|-------|
 | **Core Architecture** | Python / Bash Glue | **Native C++20 Engine** |
-| **WebView2** | Barely working | Works now YAY! (tested best with Proton)
+| **WebView2** | Barely working | **Native Support** (tested best with Proton)
 | **Startup Latency** | 2-5 Seconds | **< 200ms** |
 | **Protocol Handling** | Fragile, often breaks | **Native Socket/Pipe Interop** |
 | **Diagnostics** | "Check the logs" | **Self-Healing Orchestrator** |
-| **Asset Control** | DOWNLOAD IT YOURSELF LOL! | **Precise Binary Selection** |
+| **Asset Control** | External downloads | **Precise Binary Selection** |
 | **GPU Management** | Manual env vars | **Auto-Discovery & Injection** |
 
 ## Features
 
 *   **Zero-Latency UI**: Built with Dear ImGui and GLFW for an instant, responsive dashboard.
-*   **Modular Runners**: First-class support for **Steam Proton**, **GE-Proton**, and **System Wine**.
+*   **Credential Management**: Real-time account tracking and automated session syncing between runners.
+*   **UMU Runner**: First-class support for the Unified Linux Wine Runner (umu-run).
+*   **Vulkan Layer**: Custom Vulkan layer for enhanced stability, enforcing triple buffering and fixing swapchain recreation issues.
+*   **Modular Runners**: Support for **Steam Proton**, **GE-Proton**, and **System Wine**.
 *   **Auto-Discovery**: Automatically finds your Steam Proton installations and GPU hardware.
-*   **Smart Assets**: Intelligently filters GitHub releases to download only valid binary archives, preventing "source code" download errors.
-*   **Preset System**: Save, load, import, and export configuration presets. Exports are sanitized to protect your privacy.
 *   **Live Diagnostics**: A real-time health grid that detects and fixes issues with dependencies, desktop entries, and protocol handlers.
 
 ## Usage
@@ -50,23 +52,12 @@ RSJFW automatically handles browser protocols. You can also launch it manually:
 ./rsjfw launch
 ```
 
-### 4. Headless Install
-For CI/CD or automated setups, install the latest Roblox Studio without launching the UI:
-```bash
-./rsjfw install
-```
+## Recommended Workflow
 
-## Configuration Guide
+For the best experience, we recommend the following workflow:
 
-### GPU Selector
-In the **General** tab, select your primary GPU. RSJFW automatically injects `MESA_VK_DEVICE_SELECT` and `DRI_PRIME` to ensure Studio runs on your discrete hardware.
-
-### Presets
-*   **Save**: Snapshots your current configuration (Runner, FFlags, Env Vars).
-*   **Export**: Creates a portable `.rsjfwpreset` file. Local paths are stripped to ensure the preset works on other machines.
-
-### FFlags
-Manage Fast Flags with a clean grid interface. Use the "Presets" dropdown to instantly apply **Performance**, **Quality**, or **Vanilla** profiles.
+1.  **Login with Proton**: Use the **Proton** runner to log in to your Roblox account initially. The embedded WebView2 browser works most reliably under Proton for authentication flows.
+2.  **Switch Runner**: Once logged in, switch to **UMU** or **Wine** for day-to-day development. Your credentials will be automatically synced.
 
 ## Build from Source
 

@@ -2,6 +2,7 @@
 #include "config.h"
 #include "downloader/github_client.h"
 #include "discovery_manager.h"
+#include "runner_manager.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <cstring>
@@ -34,35 +35,25 @@ void RunnerView::render() {
     ImGui::Separator();
     ImGui::Dummy(ImVec2(0, 20));
 
-    const char* runners[] = { "wine", "proton" };
+    const char* runners[] = { "wine", "proton", "umu" };
     int currentRunner = 0;
     if (gen.runnerType == "Proton") currentRunner = 1;
+    else if (gen.runnerType == "UMU") currentRunner = 2;
     
     ImGui::Text("environment type");
     ImGui::SameLine(180);
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 10);
     if (ImGui::BeginCombo("##RunnerType", runners[currentRunner])) {
-        for (int i = 0; i < 2; i++) {
+        for (int i = 0; i < 3; i++) {
             bool isSelected = (currentRunner == i);
             if (ImGui::Selectable(runners[i], isSelected)) {
-                gen.runnerType = (i == 1) ? "Proton" : "Wine";
+                gen.runnerType = (i == 1) ? "Proton" : (i == 2) ? "UMU" : "Wine";
+                RunnerManager::instance().refresh();
             }
             if (isSelected) ImGui::SetItemDefaultFocus();
         }
         ImGui::EndCombo();
     }
-    
-    ImGui::Dummy(ImVec2(0, 10));
-    ImGui::Text("execution wrapper");
-    ImGui::SameLine(180);
-    InputTextString("##Wrapper", gen.launchWrapper, ImGui::GetContentRegionAvail().x - 10);
-    
-    ImGui::SetCursorPosX(180);
-    ImGui::BeginGroup();
-    if (ImGui::Button("gamemode", ImVec2(100, 25))) gen.launchWrapper = "gamemoderun";
-    ImGui::SameLine();
-    if (ImGui::Button("gamescope", ImVec2(100, 25))) gen.launchWrapper = "gamescope -W 1920 -H 1080 -r 144 --";
-    ImGui::EndGroup();
     
     ImGui::Dummy(ImVec2(0, 10));
     ImGui::Checkbox("enable mangohud", &gen.enableMangoHud);
@@ -71,7 +62,7 @@ void RunnerView::render() {
     
     ImGui::Dummy(ImVec2(0, 20));
     
-    if (gen.runnerType == "Proton") renderProtonConfig();
+    if (gen.runnerType == "Proton" || gen.runnerType == "UMU") renderProtonConfig();
     else renderWineConfig();
 }
 
@@ -104,7 +95,9 @@ void RunnerView::renderWineConfig() {
 
         ImGui::Text("repository");
         ImGui::SameLine(180);
-        InputTextString("##WineRepo", src.repo, ImGui::GetContentRegionAvail().x - 10);
+        if (InputTextString("##WineRepo", src.repo, ImGui::GetContentRegionAvail().x - 10)) {
+            RunnerManager::instance().refresh();
+        }
         
         {
             std::lock_guard<std::mutex> lock(mtx_);
@@ -124,12 +117,14 @@ void RunnerView::renderWineConfig() {
             if (ImGui::Selectable("latest", src.version == "latest")) {
                 src.version = "latest";
                 src.asset = "";
+                RunnerManager::instance().refresh();
             }
             std::lock_guard<std::mutex> lock(mtx_);
             for (const auto& r : wineReleases_) {
                 if (ImGui::Selectable(r.tag.c_str(), src.version == r.tag)) {
                     src.version = r.tag;
                     src.asset = "";
+                    RunnerManager::instance().refresh();
                 }
             }
             ImGui::EndCombo();
@@ -166,6 +161,7 @@ void RunnerView::renderWineConfig() {
                         bool isSelected = (src.asset == a.name);
                         if (ImGui::Selectable(a.name.c_str(), isSelected)) {
                             src.asset = a.name;
+                            RunnerManager::instance().refresh();
                         }
                         if (isSelected) ImGui::SetItemDefaultFocus();
                     }
@@ -205,6 +201,7 @@ void RunnerView::renderWineConfig() {
                 bool isSelected = (src.customRootPath == r.path.string());
                 if (ImGui::Selectable(label.c_str(), isSelected)) {
                     src.customRootPath = r.path.string();
+                    RunnerManager::instance().refresh();
                 }
                 if (isSelected) ImGui::SetItemDefaultFocus();
             }
@@ -222,6 +219,7 @@ void RunnerView::renderWineConfig() {
         if (ImGuiFileDialog::Instance()->Display("ChooseWineRoot", ImGuiWindowFlags_NoCollapse, ImVec2(400, 600))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 src.customRootPath = ImGuiFileDialog::Instance()->GetFilePathName();
+                RunnerManager::instance().refresh();
             }
             ImGuiFileDialog::Instance()->Close();
         }
@@ -231,18 +229,35 @@ void RunnerView::renderWineConfig() {
 }
 
 void RunnerView::renderProtonConfig() {
-    auto& src = Config::instance().getGeneral().protonSource;
+    auto& gen = Config::instance().getGeneral();
+    auto& src = gen.protonSource;
     ImGui::Text("proton settings");
     ImGui::Separator();
     ImGui::Dummy(ImVec2(0, 10));
 
-    if (ImGui::RadioButton("fetch from github##P", !src.useCustomRoot)) src.useCustomRoot = false;
+    if (gen.runnerType == "UMU") {
+        if (ImGui::RadioButton("automatic / managed by umu", !src.useCustomRoot && src.customRootPath == "GE-Proton")) {
+            src.useCustomRoot = false;
+            src.customRootPath = "GE-Proton";
+            RunnerManager::instance().refresh();
+        }
+        ImGui::SameLine();
+    }
+
+    if (ImGui::RadioButton("fetch from github##P", !src.useCustomRoot && src.customRootPath != "GE-Proton")) {
+        src.useCustomRoot = false;
+        if (src.customRootPath == "GE-Proton") src.customRootPath = "";
+        RunnerManager::instance().refresh();
+    }
     ImGui::SameLine();
-    if (ImGui::RadioButton("steam / static path##P", src.useCustomRoot)) src.useCustomRoot = true;
+    if (ImGui::RadioButton("steam / static path##P", src.useCustomRoot)) {
+        src.useCustomRoot = true;
+        RunnerManager::instance().refresh();
+    }
 
     ImGui::Dummy(ImVec2(0, 10));
 
-    if (!src.useCustomRoot) {
+    if (!src.useCustomRoot && src.customRootPath != "GE-Proton") {
         if (src.repo != lastProtonRepo_) {
             refreshVersions(src.repo, true);
             lastProtonRepo_ = src.repo;
@@ -259,7 +274,9 @@ void RunnerView::renderProtonConfig() {
 
         ImGui::Text("repository");
         ImGui::SameLine(180);
-        InputTextString("##ProtonRepo", src.repo, ImGui::GetContentRegionAvail().x - 10);
+        if (InputTextString("##ProtonRepo", src.repo, ImGui::GetContentRegionAvail().x - 10)) {
+            RunnerManager::instance().refresh();
+        }
 
         {
             std::lock_guard<std::mutex> lock(mtx_);
@@ -279,12 +296,14 @@ void RunnerView::renderProtonConfig() {
             if (ImGui::Selectable("latest", src.version == "latest")) {
                 src.version = "latest";
                 src.asset = "";
+                RunnerManager::instance().refresh();
             }
             std::lock_guard<std::mutex> lock(mtx_);
             for (const auto& r : protonReleases_) {
                 if (ImGui::Selectable(r.tag.c_str(), src.version == r.tag)) {
                     src.version = r.tag;
                     src.asset = "";
+                    RunnerManager::instance().refresh();
                 }
             }
             ImGui::EndCombo();
@@ -321,6 +340,7 @@ void RunnerView::renderProtonConfig() {
                         bool isSelected = (src.asset == a.name);
                         if (ImGui::Selectable(a.name.c_str(), isSelected)) {
                             src.asset = a.name;
+                            RunnerManager::instance().refresh();
                         }
                         if (isSelected) ImGui::SetItemDefaultFocus();
                     }
@@ -329,7 +349,7 @@ void RunnerView::renderProtonConfig() {
             }
         }
 
-    } else {
+    } else if (src.useCustomRoot) {
         ImGui::Text("local proton path");
         ImGui::SameLine(180);
         
@@ -359,6 +379,7 @@ void RunnerView::renderProtonConfig() {
                 bool isSelected = (src.customRootPath == r.path.string());
                 if (ImGui::Selectable(r.name.c_str(), isSelected)) {
                     src.customRootPath = r.path.string();
+                    RunnerManager::instance().refresh();
                 }
                 if (isSelected) ImGui::SetItemDefaultFocus();
             }
@@ -376,13 +397,20 @@ void RunnerView::renderProtonConfig() {
         if (ImGuiFileDialog::Instance()->Display("ChooseProtonRoot", ImGuiWindowFlags_NoCollapse, ImVec2(400, 600))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 src.customRootPath = ImGuiFileDialog::Instance()->GetFilePathName();
+                RunnerManager::instance().refresh();
             }
             ImGuiFileDialog::Instance()->Close();
         }
+    } else if (src.customRootPath == "GE-Proton") {
+        ImGui::TextDisabled("UMU will automatically download and use the latest GE-Proton build.");
+        ImGui::Dummy(ImVec2(0, 10));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+        ImGui::TextWrapped("WARNING: Default UMU-Proton lacks critical functions (VirtualProtectFromApp) required by Roblox.");
+        ImGui::TextWrapped("Roblox Studio will likely fail to launch unless you use a custom GE-Proton version via 'fetch from github'.");
+        ImGui::PopStyleColor();
     }
 
     ImGui::Dummy(ImVec2(0, 10));
-    auto& gen = Config::instance().getGeneral();
     ImGui::Checkbox("enable fsync", &gen.enableFsync);
     ImGui::SameLine();
     ImGui::Checkbox("enable esync", &gen.enableEsync);

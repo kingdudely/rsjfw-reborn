@@ -90,7 +90,7 @@ namespace rsjfw
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-        curl_easy_setopt(curl, CURLOPT_USERAGENT, "RSJFW/2.0");
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, "RSJFW/1.1.0");
         CURLcode res = curl_easy_perform(curl);
         curl_easy_cleanup(curl);
         if (res != CURLE_OK) throw std::runtime_error("CURL GET failed: " + url);
@@ -121,7 +121,7 @@ namespace rsjfw
 
             curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
             curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-            curl_easy_setopt(curl, CURLOPT_USERAGENT, "RSJFW/2.0");
+            curl_easy_setopt(curl, CURLOPT_USERAGENT, "RSJFW/1.1.0");
             curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, fileWriteCallback);
             curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ofs);
             curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);

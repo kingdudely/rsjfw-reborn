@@ -47,13 +47,12 @@ nlohmann::json Config::serialize() const {
     j["general"]["robloxVersion"] = general_.robloxVersion;
     j["general"]["targetFps"] = general_.targetFps;
     j["general"]["lightingTechnology"] = general_.lightingTechnology;
-    j["general"]["darkMode"] = general_.darkMode;
+    j["general"]["studioTheme"] = general_.studioTheme;
 
     j["general"]["desktopMode"] = general_.desktopMode;
     j["general"]["multipleDesktops"] = general_.multipleDesktops;
     j["general"]["desktopResolution"] = general_.desktopResolution;
     
-    j["general"]["launchWrapper"] = general_.launchWrapper;
     j["general"]["selectedGpu"] = general_.selectedGpu;
     j["general"]["hideLauncher"] = general_.hideLauncher;
     j["general"]["autoApplyFixes"] = general_.autoApplyFixes;
@@ -62,6 +61,23 @@ nlohmann::json Config::serialize() const {
     j["general"]["enableFsync"] = general_.enableFsync;
     j["general"]["enableEsync"] = general_.enableEsync;
     j["general"]["enableWebView2"] = general_.enableWebView2;
+
+    j["general"]["umuId"] = general_.umuId;
+    j["general"]["enableGamemode"] = general_.enableGamemode;
+    j["general"]["gamemodeArgs"] = general_.gamemodeArgs;
+    j["general"]["enableGamescope"] = general_.enableGamescope;
+    j["general"]["gamescopeArgs"] = general_.gamescopeArgs;
+
+    json customLaunchers = json::array();
+    for (const auto& l : general_.customLaunchers) {
+        customLaunchers.push_back({{"enabled", l.enabled}, {"command", l.command}, {"args", l.args}});
+    }
+    j["general"]["customLaunchers"] = customLaunchers;
+
+    j["general"]["enableVulkanLayer"] = general_.enableVulkanLayer;
+    j["general"]["vulkanPresentMode"] = general_.vulkanPresentMode;
+    j["general"]["enableLayerLogging"] = general_.enableLayerLogging;
+    j["general"]["enableRenderdoc"] = general_.enableRenderdoc;
 
     j["general"]["wineSource"]["repo"] = general_.wineSource.repo;
     j["general"]["wineSource"]["version"] = general_.wineSource.version;
@@ -91,20 +107,19 @@ nlohmann::json Config::serialize() const {
 void Config::deserialize(const nlohmann::json& j) {
     if (j.contains("general")) {
         auto& g = j["general"];
-        general_.runnerType = g.value("runnerType", "Wine");
-        general_.renderer = g.value("renderer", "D3D11");
+        general_.runnerType = g.value("runnerType", "Proton");
+        general_.renderer = g.value("renderer", "Vulkan");
         general_.dxvk = g.value("dxvk", true);
         general_.channel = g.value("channel", "LIVE");
         general_.robloxVersion = g.value("robloxVersion", "");
         general_.targetFps = g.value("targetFps", 60);
         general_.lightingTechnology = g.value("lightingTechnology", "Default");
-        general_.darkMode = g.value("darkMode", true);
+        general_.studioTheme = g.value("studioTheme", "Default");
 
         general_.desktopMode = g.value("desktopMode", false);
         general_.multipleDesktops = g.value("multipleDesktops", false);
         general_.desktopResolution = g.value("desktopResolution", "1920x1080");
         
-        general_.launchWrapper = g.value("launchWrapper", "");
         general_.selectedGpu = g.value("selectedGpu", "");
         general_.hideLauncher = g.value("hideLauncher", false);
         general_.autoApplyFixes = g.value("autoApplyFixes", true);
@@ -113,6 +128,24 @@ void Config::deserialize(const nlohmann::json& j) {
         general_.enableFsync = g.value("enableFsync", true);
         general_.enableEsync = g.value("enableEsync", true);
         general_.enableWebView2 = g.value("enableWebView2", true);
+
+        general_.umuId = g.value("umuId", "roblox-studio");
+        general_.enableGamemode = g.value("enableGamemode", false);
+        general_.gamemodeArgs = g.value("gamemodeArgs", "");
+        general_.enableGamescope = g.value("enableGamescope", false);
+        general_.gamescopeArgs = g.value("gamescopeArgs", "-W 1920 -H 1080 -f");
+
+        general_.customLaunchers.clear();
+        if (g.contains("customLaunchers")) {
+            for (const auto& l : g["customLaunchers"]) {
+                general_.customLaunchers.push_back({l.value("enabled", false), l.value("command", ""), l.value("args", "")});
+            }
+        }
+
+        general_.enableVulkanLayer = g.value("enableVulkanLayer", true);
+        general_.vulkanPresentMode = g.value("vulkanPresentMode", "FIFO");
+        general_.enableLayerLogging = g.value("enableLayerLogging", false);
+        general_.enableRenderdoc = g.value("enableRenderdoc", false);
 
         if (g.contains("wineSource")) {
             auto& w = g["wineSource"];

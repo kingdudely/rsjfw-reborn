@@ -1,17 +1,33 @@
 #include "gui/views/home_view.h"
 #include "gui.h"
-#include "diagnostics.h"
 #include "config.h"
+#include "path_manager.h"
+#include "runner_manager.h"
+#include "http.h"
+#include "async_image_loader.h"
 #include <imgui.h>
-#include <thread>
-#include <mutex>
-#include <cmath>
 #include <filesystem>
+#include <thread>
 
 namespace rsjfw {
 
 HomeView::HomeView() {
-    Diagnostics::instance().runChecks();
+    refreshUsers();
+}
+
+void HomeView::refreshUsers() {
+    if (refreshing_) return;
+    refreshing_ = true;
+
+    std::thread([this]() {
+        auto runner = RunnerManager::instance().get();
+        if (runner) {
+            auto users = CredentialManager::instance().getLoggedInUsers(runner->getPrefix());
+            std::lock_guard<std::mutex> lock(usersMtx_);
+            cachedUsers_ = std::move(users);
+        }
+        refreshing_ = false;
+    }).detach();
 }
 
 void HomeView::render() {
@@ -64,63 +80,74 @@ void HomeView::render() {
 
         if (gen.runnerType == "Wine") {
             runnerVer = gen.wineSource.version;
-            if (gen.wineSource.useCustomRoot) {
-                std::string p = gen.wineSource.customRootPath;
-                if (p.find("/usr/bin/wine") != std::string::npos) runnerVal = "system wine";
-                else if (p.empty()) runnerVal = "none selected";
-                else runnerVal = std::filesystem::path(p).filename().string();
-            } else {
-                runnerVal = gen.wineSource.repo;
-            }
+            runnerVal = gen.wineSource.useCustomRoot ? "custom" : gen.wineSource.repo;
         } else if (gen.runnerType == "Proton") {
             runnerVer = gen.protonSource.version;
-            if (gen.protonSource.useCustomRoot) {
-                std::string p = gen.protonSource.customRootPath;
-                if (p.find(".steam") != std::string::npos || p.find("Steam") != std::string::npos) runnerVal = "steam proton";
-                else if (p.empty()) runnerVal = "none selected";
-                else runnerVal = std::filesystem::path(p).filename().string();
-            } else {
-                runnerVal = gen.protonSource.repo;
-            }
+            runnerVal = gen.protonSource.useCustomRoot ? "custom" : gen.protonSource.repo;
+        } else {
+            runnerVer = "umu-launcher";
+            runnerVal = gen.umuId;
         }
 
         StatusCard("CH", "channel", gen.channel.c_str(), gen.robloxVersion.c_str(), ImVec4(0.2f, 0.7f, 1.0f, 1.0f));
         StatusCard("RN", "runner", runnerVal.c_str(), runnerVer.c_str(), ImVec4(1.0f, 0.5f, 0.1f, 1.0f));
-        
-        std::string dxVal = gen.dxvk ? gen.dxvkSource.repo : "disabled";
-        std::string dxVer = gen.dxvk ? gen.dxvkSource.version : "n/a";
-        StatusCard("DX", "dxvk", dxVal.c_str(), dxVer.c_str(), gen.dxvk ? ImVec4(0.2f, 0.8f, 0.2f, 1.0f) : ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
+        StatusCard("DX", "dxvk", gen.dxvk ? "enabled" : "disabled", gen.dxvkSource.version.c_str(), gen.dxvk ? ImVec4(0.2f, 0.8f, 0.2f, 1.0f) : ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
 
         ImGui::EndTable();
     }
     
     ImGui::Dummy(ImVec2(0, 20));
+    ImGui::Text("logged in accounts");
+    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0, 10));
 
-    float prog = fixProgress_.load();
-    if (prog >= 0.0f) {
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.14f, 0.14f, 0.14f, 1.0f));
-        ImGui::BeginChild("FixProgress", ImVec2(0, 85), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-        {
-            std::lock_guard<std::mutex> lock(statusMtx_);
+    std::vector<RobloxUser> users;
+    {
+        std::lock_guard<std::mutex> lock(usersMtx_);
+        users = cachedUsers_;
+    }
+
+    if (users.empty()) {
+        if (refreshing_) {
+            ImGui::TextColored(ImVec4(1, 1, 0, 1), "refreshing accounts...");
+        } else {
+            ImGui::TextDisabled("no accounts found in this prefix.");
+            if (ImGui::Button("refresh accounts")) refreshUsers();
+        }
+    } else {
+        for (const auto& user : users) {
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.12f, 0.12f, 0.12f, 1.0f));
+            ImGui::BeginChild(user.userId.c_str(), ImVec2(0, 80), true, ImGuiWindowFlags_NoScrollbar);
+            
+            unsigned int tex = AsyncImageLoader::instance().getTexture(user.profilePicUrl);
+            
             ImGui::SetCursorPos(ImVec2(15, 15));
-            ImGui::Text("optimizing: %s", fixStatus_.c_str());
+            if (tex) {
+                ImGui::Image((void*)(intptr_t)tex, ImVec2(50, 50));
+            } else {
+                ImDrawList* drawList = ImGui::GetWindowDrawList();
+                ImVec2 pos = ImGui::GetCursorScreenPos();
+                drawList->AddRectFilled(pos, ImVec2(pos.x + 50, pos.y + 50), IM_COL32(40, 40, 40, 255));
+                ImGui::Dummy(ImVec2(50, 50));
+            }
+
+            ImGui::SameLine(80);
+            ImGui::BeginGroup();
+            ImGui::Dummy(ImVec2(0, 5));
+            ImGui::Text("%s", user.username.c_str());
+            ImGui::TextDisabled("ID: %s", user.userId.c_str());
+            ImGui::EndGroup();
+            
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
+            ImGui::Dummy(ImVec2(0, 5));
         }
         
-        ImGui::SetCursorPos(ImVec2(15, 45));
-        ImGui::PushItemWidth(ImGui::GetWindowWidth() - 140);
-        ImGui::ProgressBar(prog, ImVec2(0, 25));
-        ImGui::PopItemWidth();
-
-        if (prog >= 1.0f) {
-            ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - 110, 45));
-            if (ImGui::Button("dismiss", ImVec2(95, 25))) {
-                fixProgress_ = -1.0f;
-                Diagnostics::instance().runChecks();
-            }
+        if (refreshing_) {
+            ImGui::TextColored(ImVec4(1, 1, 0, 1), "refreshing...");
+        } else {
+            if (ImGui::Button("refresh accounts")) refreshUsers();
         }
-        ImGui::EndChild();
-        ImGui::PopStyleColor();
-        ImGui::Dummy(ImVec2(0, 15));
     }
 
     ImGui::Dummy(ImVec2(0, 50));

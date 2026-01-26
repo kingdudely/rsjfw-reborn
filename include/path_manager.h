@@ -22,6 +22,8 @@ public:
     std::filesystem::create_directories(versions());
     std::filesystem::create_directories(prefix());
     std::filesystem::create_directories(wine());
+    std::filesystem::create_directories(root_ / "umu_data");
+    std::filesystem::create_directories(root_ / "proton_data");
   }
 
   std::filesystem::path root() const { return root_; }
@@ -29,6 +31,8 @@ public:
   std::filesystem::path versions() const { return root_ / "versions"; }
   std::filesystem::path prefix() const { return root_ / "prefix"; }
   std::filesystem::path wine() const { return root_ / "wine"; }
+  std::filesystem::path umu() const { return root_ / "umu_data"; }
+  std::filesystem::path proton() const { return root_ / "proton_data"; }
 
   std::filesystem::path executablePath() const {
     char buf[1024];

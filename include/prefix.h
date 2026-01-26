@@ -2,22 +2,17 @@
 #define RSJFW_PREFIX_H
 
 #include "os/cmd.h"
+#include "registry.h"
 #include <functional>
 #include <optional>
 #include <string>
 #include <vector>
 #include <map>
+#include <memory>
 
 namespace rsjfw {
 
 using ProgressCb = std::function<void(float, std::string)>;
-
-struct RegistryEntry {
-  std::string key;
-  std::string valueName;
-  std::string value;
-  std::string type;
-};
 
 class Prefix {
 public:
@@ -30,6 +25,7 @@ public:
 
   bool init(ProgressCb cb = nullptr);
   bool kill();
+  bool waitForExit();
 
   bool wine(const std::string &exe, const std::vector<std::string> &args,
             std::function<void(const std::string &)> onOutput = nullptr,
@@ -46,14 +42,16 @@ public:
 
   bool installDxvk(const std::string& dxvkRoot);
   void addLibPaths(cmd::Options& opts) const;
+  void wrapCommand(const std::string& binary, const std::vector<std::string>& args, std::string& outBinary, std::vector<std::string>& outArgs);
 
   std::string getPath() const { return rootDir_; }
   std::string getInstallDir() const { return installDir_; }
+  Registry& getRegistry() { return registry_; }
 
 private:
   std::string rootDir_;
   std::string installDir_;
-  std::vector<RegistryEntry> pendingReg_;
+  Registry registry_;
   
   std::string executorBinary_;
   std::vector<std::string> executorPreArgs_;
@@ -61,7 +59,7 @@ private:
   std::map<std::string, std::string> baseEnv_;
 
   std::string resolveBinary(const std::string &binary) const;
-  std::string generateRegFile() const;
+  std::pair<std::string, std::vector<std::string>> getWineserverCmd(const std::string& arg) const;
 };
 
 }

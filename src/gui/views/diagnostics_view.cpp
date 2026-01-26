@@ -1,7 +1,10 @@
 #include "gui/views/diagnostics_view.h"
 #include "diagnostics.h"
+#include "config.h"
+#include "path_manager.h"
 #include <imgui.h>
 #include <thread>
+#include <fstream>
 
 namespace rsjfw {
 
@@ -16,15 +19,20 @@ void DiagnosticsView::render() {
             Diagnostics::instance().runChecks();
         }).detach();
     }
-    
+
     ImGui::Dummy(ImVec2(0, 20));
-    
+
+    auto& cfg = Config::instance().getGeneral();
+
     auto& diag = Diagnostics::instance();
     auto& results = const_cast<std::vector<std::pair<std::string, HealthStatus>>&>(diag.getResults());
     
-    if (results.empty()) {
+    if (diag.getResults().empty()) {
         ImGui::TextDisabled("no results available. please run a scan.");
     }
+    
+    ImGui::Dummy(ImVec2(0, 20));
+    ImGui::Separator();
     
     if (ImGui::BeginTable("DiagTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
         ImGui::TableSetupColumn("status", ImGuiTableColumnFlags_WidthFixed, 80);

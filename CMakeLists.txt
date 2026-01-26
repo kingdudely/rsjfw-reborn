@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 find_package(CURL REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(OpenGL REQUIRED)
+find_package(Vulkan REQUIRED)
 
 include(FetchContent)
 
@@ -58,6 +59,13 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(stb)
 
+FetchContent_Declare(
+  googletest
+  URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz
+)
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
+
 include_directories(${json_SOURCE_DIR}/include)
 include_directories(include)
 include_directories(${imgui_SOURCE_DIR})
@@ -65,8 +73,11 @@ include_directories(${imgui_SOURCE_DIR}/backends)
 include_directories(${stb_SOURCE_DIR})
 include_directories(${imguifiledialog_SOURCE_DIR})
 
+add_subdirectory(src/layer)
+
 file(GLOB_RECURSE MAIN_SOURCES "src/*.cpp")
-  
+list(REMOVE_ITEM MAIN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/layer/layer.cpp")
+
 add_executable(rsjfw ${MAIN_SOURCES} ${IMGUI_SOURCES} ${imguifiledialog_SOURCE_DIR}/ImGuiFileDialog.cpp)
 
 target_link_libraries(rsjfw
@@ -76,10 +87,21 @@ target_link_libraries(rsjfw
     ${LibArchive_LIBRARIES}
     glfw
     OpenGL::GL
+    Vulkan::Vulkan
     pthread
     dl
 )
 
 install(TARGETS rsjfw DESTINATION bin)
 
-install(TARGETS rsjfw DESTINATION bin)
+enable_testing()
+add_executable(registry_test tests/registry_test.cpp src/registry.cpp src/logger.cpp)
+target_link_libraries(registry_test GTest::gtest_main)
+include(GoogleTest)
+gtest_discover_tests(registry_test)
+
+add_executable(registry_verify tests/registry_verify.cpp src/registry.cpp src/logger.cpp)
+target_link_libraries(registry_verify GTest::gtest_main)
+gtest_discover_tests(registry_verify)
+
+add_executable(reg_convert tests/reg_convert.cpp src/registry.cpp src/logger.cpp)
